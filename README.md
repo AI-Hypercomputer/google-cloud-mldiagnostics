@@ -39,14 +39,14 @@ Install pypi package [link](https://pypi.org/project/google-cloud-mldiagnostics/
 pip install google-cloud-mldiagnostics
 ```
 
-This package does not install `libtpu`, `jax` and `xprof` and expects they will
-be installed separately.
+This package does not install `libtpu`, `jax` and `xprof` and expects they are
+installed separately.
 
 ## How to use
 
 ### Monitor training
 
-At the beginning of the training script create a machine learning run:
+At the beginning of the training script, create a machine learning run:
 
 ```python
 from google_cloud_mldiagnostics import machinelearning_run
@@ -63,7 +63,7 @@ machinelearning_run(
 from google_cloud_mldiagnostics import machinelearning_run
 
 machinelearning_run(
-  name=<run-name>
+  name=<run-name>,
   gcs_path="gs://<bucket>",
   on_demand_xprof=True
 )
@@ -76,11 +76,11 @@ from google_cloud_mldiagnostics import machinelearning_run
 from google_cloud_mldiagnostics import xprof
 
 machinelearning_run(
-  name=<run-name>
+  name=<run-name>,
   gcs_path="gs://<bucket>",
 )
 
-xprof=xprof()
+xprof = xprof()
 xprof.start()
 # some code
 xprof.stop()
@@ -94,13 +94,14 @@ from google_cloud_mldiagnostics import metrics
 from google_cloud_mldiagnostics import metric_types
 
 machinelearning_run(
+  name=<run-name>,
   gcs_path="gs://<bucket>",
 )
 
 metrics.record(metric_type.MetricType.LOSS, <value>)
 ```
 
-To pair metric value with current step:
+To pair the metric value with the current step:
 
 ```python
 metrics.record(metric_type.MetricType.LOSS, <value>, step=<step>)
@@ -113,14 +114,15 @@ from google_cloud_mldiagnostics import machinelearning_run
 from google_cloud_mldiagnostics import metrics
 
 machinelearning_run(
+  name=<run-name>,
   gcs_path="gs://<bucket>",
 )
 
 metrics.record("<my-metric>", <value>)
 ```
 
-To pair metric value with current step:
+To pair the metric value with the current step:
 
 ```python
-metrics.record("<my-metric>", <value>, step=1)
+metrics.record("<my-metric>", <value>, step=<value>)
 ```
