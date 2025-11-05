@@ -14,7 +14,7 @@
 
 [project]
 name = "google-cloud-mldiagnostics"
-version = "0.5.0"
+version = "0.5.1"
 description = "diagnostic packages for profiling and ML experiment management"
 authors = [
     {name = "Google Diagon++", email = "hypercompute-diagon@google.com"}
