@@ -136,7 +136,7 @@ def _collect_profile(
   print(f"Starting remote profile for {hosts} on {port}...")
 
   if session_name:
-    print(f"Session name ${session_name}, xprof is not supported it yet, skip")
+    options["session_id"] = session_name
   else:
     print("Session name not provided, xprof will use auto generated")
 
