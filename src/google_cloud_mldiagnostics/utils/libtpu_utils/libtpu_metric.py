@@ -14,6 +14,7 @@
 
 """Utility functions for working with libtpu metrics."""
 
+from importlib import metadata
 import logging
 
 try:
@@ -27,6 +28,19 @@ except ImportError:
 
 
 logger = logging.getLogger(__name__)
+
+
+def get_libtpu_version() -> str:
+  """Returns libtpu version if available, otherwise 'n/a'."""
+  if not _LIBTPU_METRICS_AVAILABLE:
+    return "n/a"
+  try:
+    return metadata.version("libtpu")
+  except metadata.PackageNotFoundError:
+    try:
+      return metadata.version("libtpu-nightly")
+    except metadata.PackageNotFoundError:
+      return "n/a"
 
 
 def _get_monitoring_module():
