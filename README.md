@@ -15,7 +15,22 @@
  -->
 # google-cloud-mldiagnostics
 
-[TOC]
+- [Overview](#overview)
+  - [Github Repo](#github-repo)
+  - [Machine Learning Run Intro](#machine-learning-run-intro)
+- [Setup](#setup)
+  - [Enable API](#enable-api)
+  - [IAM Permissions](#iam-permissions)
+  - [Google Storage Bucket](#google-storage-bucket)
+  - [Configure GKE Cluster](#configure-gke-cluster)
+  - [Install SDK](#install-sdk)
+- [How to use](#how-to-use)
+  - [Creating a machine learning run](#creating-a-machine-learning-run)
+  - [Write configs using yaml or json](#write-configs-using-yaml-or-json)
+  - [Collect metrics](#collect-metrics)
+  - [Programmatic Profile Capture](#programmatic-profile-capture)
+  - [Multi-host (process) profiling](#multi-host-process-profiling)
+  - [Enable On-Demand Profile Capture](#enable-on-demand-profile-capture)
 
 ## Overview
 
