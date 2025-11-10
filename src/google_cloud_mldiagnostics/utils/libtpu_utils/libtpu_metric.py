@@ -17,22 +17,45 @@
 from importlib import metadata
 import logging
 
-try:
-  # pylint: disable=g-import-not-at-top
-  from libtpu import sdk as libtpu_sdk  # pytype: disable=import-error
-
-  _LIBTPU_METRICS_AVAILABLE = True
-except ImportError:
-  libtpu_sdk = None
-  _LIBTPU_METRICS_AVAILABLE = False
-
-
 logger = logging.getLogger(__name__)
+
+libtpu_sdk = None
+_monitoring_module = None
+_initialized = False
+
+
+def _initialize():
+  """Initializes libtpu sdk and monitoring module."""
+  global libtpu_sdk, _monitoring_module, _initialized
+  if _initialized:
+    return
+
+  _initialized = True
+  try:
+    # pylint: disable=g-import-not-at-top
+    from libtpu import sdk as libtpu_sdk_imported  # pytype: disable=import-error
+
+    libtpu_sdk = libtpu_sdk_imported
+    if hasattr(libtpu_sdk, "tpumonitoring"):
+      _monitoring_module = libtpu_sdk.tpumonitoring
+    elif hasattr(libtpu_sdk, "monitoring"):
+      _monitoring_module = libtpu_sdk.monitoring
+    else:
+      _monitoring_module = None
+  except ImportError:
+    libtpu_sdk = None
+    _monitoring_module = None
+    logger.warning(
+        "LibTPU metrics are not available. Please make sure libtpu is"
+        " installed."
+    )
 
 
 def get_libtpu_version() -> str:
   """Returns libtpu version if available, otherwise 'n/a'."""
-  if not _LIBTPU_METRICS_AVAILABLE:
+  if not _initialized:
+    _initialize()
+  if not libtpu_sdk:
     return "n/a"
   try:
     return metadata.version("libtpu")
@@ -43,25 +66,10 @@ def get_libtpu_version() -> str:
       return "n/a"
 
 
-def _get_monitoring_module():
-  """Returns the monitoring module from libtpu sdk."""
-  if not _LIBTPU_METRICS_AVAILABLE:
-    logger.warning(
-        "LibTPU metrics are not available. Please make sure libtpu is"
-        " installed."
-    )
-    return None
-  if hasattr(libtpu_sdk, "tpumonitoring"):
-    return libtpu_sdk.tpumonitoring
-  elif hasattr(libtpu_sdk, "monitoring"):
-    return libtpu_sdk.monitoring
-
-
-_monitoring_module = _get_monitoring_module()
-
-
 def get_tpu_duty_cycle() -> list[float] | None:
   """Returns the TPU duty cycle from libtpu sdk."""
+  if not _initialized:
+    _initialize()
   if not _monitoring_module:
     return None
   try:
@@ -75,6 +83,8 @@ def get_tpu_duty_cycle() -> list[float] | None:
 
 def get_tpu_tensorcore_utilization() -> list[float] | None:
   """Returns the TPU tensorcore utilization from libtpu sdk."""
+  if not _initialized:
+    _initialize()
   if not _monitoring_module:
     return None
   try:
@@ -90,6 +100,8 @@ def get_tpu_tensorcore_utilization() -> list[float] | None:
 
 def get_hbm_utilization() -> list[float] | None:
   """Returns the HBM utilization from libtpu sdk."""
+  if not _initialized:
+    _initialize()
   if not _monitoring_module:
     return None
   try:
