@@ -23,7 +23,6 @@ from google_cloud_mldiagnostics.clients import control_plane_client
 from google_cloud_mldiagnostics.clients import logging_client
 from google_cloud_mldiagnostics.custom_types import mlrun_types
 from google_cloud_mldiagnostics.utils import host_utils
-from google_cloud_mldiagnostics.utils.libtpu_utils import libtpu_metric
 
 
 logger = logging.getLogger(__name__)
@@ -102,9 +101,6 @@ class GlobalRunManager:
                   ),
                   "on_demand_xprof": (
                       "enabled" if mlrun.on_demand_xprof else "disabled"
-                  ),
-                  "libtpu_version": libtpu_metric.get_libtpu_version().replace(
-                      ".", "-"
                   ),
               },
               orchestrator=mlrun.orchestrator,

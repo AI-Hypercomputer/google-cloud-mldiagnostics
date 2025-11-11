@@ -19,6 +19,7 @@ import os
 from typing import Any
 
 from google_cloud_mldiagnostics.utils.jax_utils import jax_config
+from google_cloud_mldiagnostics.utils.libtpu_utils import libtpu_metric
 
 _config_instance = None
 
@@ -54,6 +55,7 @@ def get_software_config() -> dict[str, str]:
       "framework": _get_framework(),
       "framework_version": _get_framework_version(),
       "xla_flags": _get_xla_flags(),
+      "libtpu_version": libtpu_metric.get_libtpu_version(),
   }
 
 
