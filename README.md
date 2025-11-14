@@ -100,7 +100,8 @@ A Google Cloud Storage bucket to store profile data.
 ### Configure GKE Cluster
 
 If GKE will be used for the ML workload, user needs to install the following to
-their GKE cluster
+their GKE cluster. Please ensure the GKE cluster is configured as a regional
+cluster with Workload Identity enabled.
 
 #### GKE: Install injection-webhook in the cluster
 
