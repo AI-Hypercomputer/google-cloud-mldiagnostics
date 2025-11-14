@@ -96,6 +96,9 @@ class GlobalRunManager:
               artifacts=artifacts,
               labels={
                   "created_by": "diagon_sdk",
+                  # Request provision xprof tool, could be removed when Control
+                  # Plane will do that by default.
+                  "create-tool-mode": "regular",
                   "diagon_sdk_version": (
                       _version.get_version().replace(".", "-")
                   ),
