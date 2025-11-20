@@ -83,6 +83,12 @@ parser.add_argument(
     help="Profiler Python tracer level",
     type=int,
 )
+parser.add_argument(
+    "--override_hostnames",
+    default="",
+    help="Comma separated list of hostnames to use for trace filenames.",
+    type=str,
+)
 
 
 def _import_xprof():
@@ -102,7 +108,72 @@ def _import_xprof():
   return _pywrap_profiler_plugin
 
 
+def _validate(hostname: str) -> str:
+  """Validates and sanitizes a single hostname.
+
+  Checks that the hostname is valid (non-empty, no spaces, no colons).
+  Strips leading/trailing whitespace from hostname.
+
+  Args:
+    hostname: The hostname to validate.
+
+  Returns:
+    A validated and sanitized hostname.
+
+  Raises:
+    ValueError: If validation fails.
+  """
+  stripped_hostname = hostname.strip()
+  if not stripped_hostname:
+    raise ValueError(
+        "Each hostname in override_hostnames must not be empty or contain"
+        " only whitespace."
+    )
+  if " " in stripped_hostname:
+    raise ValueError(
+        f"Hostname '{stripped_hostname}' in override_hostnames cannot"
+        " contain spaces."
+    )
+  if ":" in stripped_hostname:
+    raise ValueError(
+        f"Hostname '{stripped_hostname}' in override_hostnames cannot"
+        " contain colons (:)."
+    )
+  return stripped_hostname
+
+
+def _validate_hostnames(
+    hosts: str, override_hostnames: str
+) -> str:
+  """Validates and sanitizes override_hostnames.
+
+  Checks that number of hostnames matches number of hosts, and that each
+  hostname is valid (non-empty, no spaces, no colons). Strips leading/trailing
+  whitespace from each hostname.
+
+  Args:
+    hosts: Comma-separated list of hostnames or IPs.
+    override_hostnames: Comma-separated list of hostnames to use for trace
+      filenames.
+
+  Returns:
+    A comma-separated string of validated and sanitized hostnames.
+
+  Raises:
+    ValueError: If validation fails.
+  """
+  hostnames = override_hostnames.split(",")
+  if len(hosts.split(",")) != len(hostnames):
+    raise ValueError(
+        "Number of hosts and override_hostnames must be equal if"
+        " override_hostnames is provided."
+    )
+
+  return ",".join(_validate(hostname) for hostname in hostnames)
+
+
 def _collect_profile(
+    *,
     hosts: str,
     port: int,
     duration_in_ms: int,
@@ -111,6 +182,7 @@ def _collect_profile(
     host_tracer_level: int,
     device_tracer_level: int,
     python_tracer_level: int,
+    override_hostnames: str,
 ):
   """Collects a profile from the specified hosts and ports.
 
@@ -124,6 +196,8 @@ def _collect_profile(
     host_tracer_level: The level of host tracing.
     device_tracer_level: The level of device tracing.
     python_tracer_level: The level of Python tracing.
+    override_hostnames: Comma-separated list of hostnames to use for trace
+      filenames.
   """
   options = {
       "host_tracer_level": host_tracer_level,
@@ -139,6 +213,11 @@ def _collect_profile(
     options["session_id"] = session_name
   else:
     print("Session name not provided, xprof will use auto generated")
+
+  if override_hostnames:
+    options["override_hostnames"] = _validate_hostnames(
+        hosts, override_hostnames
+    )
 
   xprof = _import_xprof()
   xprof.trace(
@@ -163,14 +242,15 @@ def _to_hosts_port(hosts: str, port: int):
 def main(args: List[str] | None):
   parsed_args = parser.parse_args(args)
   _collect_profile(
-      parsed_args.hosts,
-      parsed_args.port,
-      parsed_args.duration_in_ms,
-      parsed_args.log_dir,
-      parsed_args.session_name,
-      parsed_args.host_tracer_level,
-      parsed_args.device_tracer_level,
-      parsed_args.python_tracer_level,
+      hosts=parsed_args.hosts,
+      port=parsed_args.port,
+      duration_in_ms=parsed_args.duration_in_ms,
+      log_dir=parsed_args.log_dir,
+      session_name=parsed_args.session_name,
+      host_tracer_level=parsed_args.host_tracer_level,
+      device_tracer_level=parsed_args.device_tracer_level,
+      python_tracer_level=parsed_args.python_tracer_level,
+      override_hostnames=parsed_args.override_hostnames,
   )
 
 
