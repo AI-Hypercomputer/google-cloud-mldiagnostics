@@ -181,28 +181,29 @@ kubectl apply -f mldiagnostics-injection-webhook-v0.5.0.yaml -n gke-mldiagnostic
 # kubectl delete -f  mldiagnostics-injection-webhook-v0.5.0.yaml -n gke-mldiagnostics
 ```
 
-Label workload’s namespace or itself with `managed-mldiagnostics-gke=true`
+#### Label workload
 
-To trigger injection-webhook to inject metadata into pods, labelling is needed
-before deploying workload.
+To trigger the injection-webhook to inject metadata into pods, you need to label either the workload itself or its namespace with `managed-mldiagnostics-gke=true` before deploying the workload. You have two options:
 
-Label a namespace with `managed-mldiagnostics-gke=true`
-kubectl create namespace ai-workloads
-kubectl label namespace ai-workloads `managed-mldiagnostics-gke=true`
+1.  **Label a namespace:** This will enable the webhook for all Jobset/LWS/RayJob workloads within that namespace.
 
-Label a workload with `managed-mldiagnostics-gke=true`
+    ```bash
+    kubectl create namespace ai-workloads
+    kubectl label namespace ai-workloads managed-mldiagnostics-gke=true
+    ```
 
-```yaml
-# jobset
+2.  **Label a Jobset/LWS/RayJob workload:** This will enable the webhook only for the specific workload.
 
-apiVersion: jobset.x-k8s.io/v1alpha2
-kind: JobSet
-metadata:
-  name: single-host-tpu-v3-jobset2
-  namespace: default
-  labels:
-    managed-mldiagnostics-gke : "true"
-```
+    ```yaml
+    # Example for JobSet
+    apiVersion: jobset.x-k8s.io/v1alpha2
+    kind: JobSet
+    metadata:
+      name: single-host-tpu-v3-jobset2
+      namespace: default
+      labels:
+        managed-mldiagnostics-gke: "true"
+    ```
 
 #### GKE: Install connection-operator in the cluster
 
