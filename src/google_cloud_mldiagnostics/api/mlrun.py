@@ -21,6 +21,11 @@ from google_cloud_mldiagnostics.custom_types import exceptions
 from google_cloud_mldiagnostics.custom_types import mlrun_types
 
 
+# List of supported regions for MLRun - New supported regions can be added here
+# to expand the region list as required in future.
+SUPPORTED_REGIONS = ["us-central1", "us-east5", "europe-west4"]
+
+
 # Main SDK function - this is the primary interface users will import
 def machinelearning_run(
     name: str,
@@ -84,11 +89,9 @@ def machinelearning_run(
         "environment must be one of 'autopush', 'staging', or 'prod'."
     )
 
-  # TODO: [INTERNAL] - Remove this check (as well as the test) once
-  # multi-region support is added.
-  if region != "us-central1":
+  if region not in SUPPORTED_REGIONS:
     raise exceptions.MLRunConfigurationError(
-        "region must be 'us-central1' for now."
+        f"region must be one of {SUPPORTED_REGIONS} for now."
     )
 
   return create_mlrun.initialize_mlrun(
