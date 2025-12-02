@@ -145,32 +145,47 @@ def initialize_mlrun(
                 (
                     metric_types.MetricType.TPU_DUTY_CYCLE.value,
                     metric_utils.get_tpu_duty_cycle,
-                    {"hostname": "host" + str(host_utils.get_process_index()),
-                     "unit": "percent per chip",},
+                    {
+                        "hostname": host_utils.get_hostname(),
+                        "process_index": str(host_utils.get_process_index()),
+                        "unit": "percent per chip",
+                    },
                 ),
                 (
                     metric_types.MetricType.TPU_TENSORCORE_UTILIZATION.value,
                     metric_utils.get_tpu_tensorcore_utilization,
-                    {"hostname": "host" + str(host_utils.get_process_index()),
-                     "unit": "percent per chip",},
+                    {
+                        "hostname": host_utils.get_hostname(),
+                        "process_index": str(host_utils.get_process_index()),
+                        "unit": "percent per chip",
+                    },
                 ),
                 (
                     metric_types.MetricType.HBM_UTILIZATION.value,
                     metric_utils.get_hbm_utilization,
-                    {"hostname": "host" + str(host_utils.get_process_index()),
-                     "unit": "percent per core",},
+                    {
+                        "hostname": host_utils.get_hostname(),
+                        "process_index": str(host_utils.get_process_index()),
+                        "unit": "percent per core",
+                    },
                 ),
                 (
                     metric_types.MetricType.HOST_CPU_UTILIZATION.value,
                     metric_utils.get_host_cpu_utilization,
-                    {"hostname": "host" + str(host_utils.get_process_index()),
-                     "unit": "percent per host",},
+                    {
+                        "hostname": host_utils.get_hostname(),
+                        "process_index": str(host_utils.get_process_index()),
+                        "unit": "percent per host",
+                    },
                 ),
                 (
                     metric_types.MetricType.HOST_MEMORY_UTILIZATION.value,
                     metric_utils.get_host_memory_utilization,
-                    {"hostname": "host" + str(host_utils.get_process_index()),
-                     "unit": "percent per host",},
+                    {
+                        "hostname": host_utils.get_hostname(),
+                        "process_index": str(host_utils.get_process_index()),
+                        "unit": "percent per host",
+                    },
                 ),
             ],
             interval_seconds=metrics_record_interval_sec,
@@ -184,7 +199,7 @@ def initialize_mlrun(
   if on_demand_xprof:
     # LINT.IfChange(xprof_port)
     xprof_port = 9999
-    # LINT.ThenChange(//depot/google3/cloud/hosted/hypercomputecluster/clh/diagnostics/consumerservice/createprofilersession.go:xprof_port)
+    # LINT.ThenChange(//depot/google3/cloud/hosted/hypercomputecluster/clh/diagnostics/consumerservice/profilersession.go:defaultCapturePort)
     xprof.start_on_demand_xprof(port=xprof_port)
 
   return ml_run

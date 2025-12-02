@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import re
+import socket
 from typing import Any
 
 from google_cloud_mldiagnostics.utils.jax_utils import jax_host
@@ -164,6 +165,11 @@ def _gke_run_identifier(workload_details: dict[str, Any]) -> str:
 
 
 # Public functions
+def get_hostname() -> str:
+  """Returns hostname of the current machine."""
+  return socket.gethostname()
+
+
 def get_process_index() -> int:
   """Returns host index."""
   # TODO: [INTERNAL] - Add support for non-jax workloads.
