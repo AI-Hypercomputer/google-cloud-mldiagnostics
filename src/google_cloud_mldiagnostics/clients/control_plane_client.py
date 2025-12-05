@@ -15,6 +15,9 @@
 """Client for sending requests to Diagon Control Plane."""
 
 import logging
+import pprint
+import random
+import time
 from typing import Any, Dict, List, Optional
 
 import google.auth
@@ -69,6 +72,88 @@ class ControlPlaneClient:
         "Content-Type": "application/json",
         "Authorization": f"Bearer {self._get_access_token()}",
     }
+
+  def get_operation(self, operation_name: str) -> Dict[str, Any]:
+    """Get an existing operation using the Google Cloud API.
+
+    Args:
+        operation_name: Name of the operation to retrieve.
+
+    Returns:
+        Response from the API as a dictionary.
+
+    Raises:
+        requests.exceptions.RequestException: If the HTTP request fails.
+    """
+    operation_url = f"{self.base_url}/{operation_name}"
+    logger.debug("Get Operation request: url=%s", operation_url)
+    response = requests.get(
+        operation_url,
+        headers=self._get_headers(),
+    )
+    try:
+      response.raise_for_status()
+    except requests.exceptions.HTTPError:
+      logger.exception(
+          "Get Operation request failed: status_code=%s, content=%s",
+          response.status_code,
+          response.text,
+      )
+      raise
+    json_response = response.json()
+    logger.debug("Get Operation response: %s", pprint.pformat(json_response))
+    return json_response
+
+  def _wait_for_operation(
+      self,
+      operation_name: str,
+      polling_interval_sec: int = 1,
+      timeout_sec: int = 300,
+  ) -> Dict[str, Any]:
+    """Waits for an operation to complete.
+
+    Args:
+        operation_name: The name of the operation to wait for.
+        polling_interval_sec: The initial interval in seconds to poll the
+          operation.
+        timeout_sec: The maximum time in seconds to wait for the operation to
+          complete.
+
+    Returns:
+        The completed operation.
+
+    Raises:
+        requests.exceptions.HTTPError: If the operation fails.
+        TimeoutError: If the operation does not complete within the timeout.
+    """
+    start_time = time.time()
+    delay = float(polling_interval_sec)
+    while True:
+      try:
+        operation = self.get_operation(operation_name)
+      except requests.exceptions.HTTPError:
+        # Re-raise HTTP errors to fail fast.
+        raise
+      except requests.exceptions.RequestException as e:
+        logger.warning(
+            "Failed to get operation status for %s: %s", operation_name, e
+        )
+      else:
+        if operation.get("done"):
+          if operation.get("error"):
+            raise requests.exceptions.HTTPError(
+                f"Operation {operation_name} failed: {operation['error']}"
+            )
+          return operation
+
+      if time.time() - start_time >= timeout_sec:
+        raise TimeoutError(
+            f"Timed out waiting for operation {operation_name} to complete."
+        )
+
+      # Operation not done or request failed, sleep with backoff
+      time.sleep(delay * (0.5 + random.random() * 0.5))
+      delay = min(delay * 2, 60.0)
 
   def create_ml_run(
       self,
@@ -165,17 +250,41 @@ class ControlPlaneClient:
 
     try:
       response.raise_for_status()
-    except requests.exceptions.HTTPError as e:
-      logger.error(
-          "Create ML Run request failed: %s, status_code=%s, content=%s",
-          e,
+    except requests.exceptions.HTTPError:
+      logger.exception(
+          "Create ML Run request failed: status_code=%s, content=%s",
           response.status_code,
           response.text,
       )
       raise
     json_response = response.json()
-    logger.debug("Create ML Run response: %s", json_response)
-    return json_response
+    logger.debug("Create ML Run response: %s", pprint.pformat(json_response))
+
+    if not json_response.get("done"):
+      operation = self._wait_for_operation(json_response["name"])
+    else:
+      operation = json_response
+
+    logger.info("Create ML Run operation: %s", pprint.pformat(operation))
+
+    if operation.get("error"):
+      raise requests.exceptions.HTTPError(
+          f"Operation {operation['name']} failed: {operation['error']}"
+      )
+
+    if operation.get("response"):
+      return operation["response"]
+    else:
+      # If no response field, fetch mlrun using target in metadata
+      metadata = operation.get("metadata", {})
+      target = metadata.get("target")
+      if not target:
+        raise ValueError(
+            f"Could not find target in operation metadata for operation"
+            f" {operation.get('name')}"
+        )
+      mlrun_name = target.split("/")[-1]
+      return self.get_ml_run(mlrun_name)
 
   def get_ml_run(self, name: str) -> Dict[str, Any]:
     """Get an existing ML run using the Google Cloud API.
@@ -198,16 +307,15 @@ class ControlPlaneClient:
 
     try:
       response.raise_for_status()
-    except requests.exceptions.HTTPError as e:
-      logger.error(
-          "Get ML Run request failed: %s, status_code=%s, content=%s",
-          e,
+    except requests.exceptions.HTTPError:
+      logger.exception(
+          "Get ML Run request failed: status_code=%s, content=%s",
           response.status_code,
           response.text,
       )
       raise
     json_response = response.json()
-    logger.debug("Get ML Run response: %s", json_response)
+    logger.debug("Get ML Run response: %s", pprint.pformat(json_response))
     return json_response
 
   def update_ml_run(
@@ -265,14 +373,13 @@ class ControlPlaneClient:
 
     try:
       response.raise_for_status()
-    except requests.exceptions.HTTPError as e:
-      logger.error(
-          "Update ML Run request failed: %s, status_code=%s, content=%s",
-          e,
+    except requests.exceptions.HTTPError:
+      logger.exception(
+          "Update ML Run request failed: status_code=%s, content=%s",
           response.status_code,
           response.text,
       )
       raise
     json_response = response.json()
-    logger.debug("Update ML Run response: %s", json_response)
+    logger.debug("Update ML Run response: %s", pprint.pformat(json_response))
     return json_response
