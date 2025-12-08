@@ -91,7 +91,7 @@ class Xprof:
     # Set up the GCS directory path
     identifier = self._resolved_run.name
     self._gcs_profile_dir = (
-        f"{self._resolved_run.gcs_path}/diagon/xprof/{identifier}"
+        f"{self._resolved_run.gcs_path}/{identifier}"
     )
     logger.info(
         "xprof initialized. Profiling output path set to: %s",
