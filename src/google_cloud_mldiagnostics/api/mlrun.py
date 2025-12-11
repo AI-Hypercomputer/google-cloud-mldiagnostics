@@ -14,12 +14,41 @@
 
 """Module for creating and managing ML runs."""
 
+import re
 from typing import Any
 
 from google_cloud_mldiagnostics.core import create_mlrun
 from google_cloud_mldiagnostics.custom_types import exceptions
 from google_cloud_mldiagnostics.custom_types import mlrun_types
 
+def normalize_gcs_path(gcs_path):
+  """Normalizes a Google Cloud Storage (GCS) path.
+
+  This function ensures that a GCS path:
+  1.  Retains the "gs://" prefix if present.
+  2.  Replaces multiple consecutive slashes with a single slash.
+  3.  Removes any trailing slash.
+
+  Args:
+      gcs_path: The GCS path string to normalize.
+
+  Returns:
+      The normalized GCS path.
+  """
+  if not gcs_path:
+    return gcs_path
+
+  if gcs_path.startswith("gs://"):
+    prefix = "gs://"
+    path_part = gcs_path[len(prefix):]
+  else:
+    prefix = ""
+    path_part = gcs_path
+
+  path_part = re.sub("/+", "/", path_part)
+  path_part = path_part.rstrip("/")
+
+  return prefix + path_part
 
 # List of supported regions for MLRun - New supported regions can be added here
 # to expand the region list as required in future.
@@ -93,6 +122,8 @@ def machinelearning_run(
     raise exceptions.MLRunConfigurationError(
         f"region must be one of {SUPPORTED_REGIONS} for now."
     )
+
+  gcs_path = normalize_gcs_path(gcs_path)
 
   return create_mlrun.initialize_mlrun(
       name=name,

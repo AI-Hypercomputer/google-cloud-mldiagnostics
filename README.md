@@ -51,9 +51,10 @@ Google Cloud ML Diagnostics includes the following features:
 - **Metrics/configs/profiles management**:
   - Track workload metrics, including model quality, model performance and system metrics.
   - Track workload configs including software configs, system configs as well as user-defined configs
-  - Manage profile sessions 
+  - Manage profile sessions
 - **Managed XProf**: Managed profiling with XProf, which allows faster loading
-of large profiles, supports multiple users simultaneously accessing profiles and supports easy to use out-of-the-box features such as multi-host profiling and
+of large profiles, supports multiple users simultaneously accessing profiles and
+supports easy to use out-of-the-box features such as multi-host profiling and
 on-demand profiling.
 - Visualization of metrics/configs/profiles in both Cluster Director and Google **Kubernetes Engine** on the Google Cloud console
 - Link sharing for ML runs and profiles for easy collaboration
@@ -64,7 +65,8 @@ This repo contains the following components for the Google Cloud MLDiagnostics
 platform:
 
 1. **google-cloud-mldiagnostics** SDK: a Python package designed for ML
-Engineers to integrate with their ML workload to help track metrics and diagnose performance of their machine learning runs. It provides functions for tracking
+Engineers to integrate with their ML workload to help track metrics and diagnose
+performance of their machine learning runs. It provides functions for tracking
 workload configs, collecting metrics and profiling performance.
 1. mldiagnostics-injection-webhook: A Helm chart to inject metadata into JobSet, RayJob, and LWS pods, which is needed by the MLDiagnostics SDK.
 1. mldiagnostics-connection-operator: A Helm chart to capture profiler traces based on the MLDiagnosticsConnection Custom Resource in frameworks like JAX.
@@ -271,7 +273,7 @@ machinelearning_run(
   configs={ "epochs": 100, "batch_size": 32 },
   project="<some_project>",
   region="<some_zone>",
-  path="gs://<some_bucket>",
+  gcs_path="gs://<some_bucket>",
   # enable on demand profiling, starts xprofz daemon on port 9999
   on_demand_xprof=True
 )
@@ -307,11 +309,11 @@ does not have to be the same as the region used for your actual workload run,
 example: you can run your workload in `europe_west4-a` but have your
 machinelearning run information stored in `us-central1-a`.
 
-`path` Required only if SDK will be used for profile capture. The Google Cloud
-Storage location where all profiles will be saved. Example `gs://my-bucket`.
-Could include folder path if needed like `gs://my-bucket/folder1`. If capturing
-profile programmatically or on-demand, this is required or else profile capture
-will error.
+`gcs_path` Required only if SDK will be used for profile capture. The Google
+Cloud Storage location where all profiles will be saved. Example
+`gs://my-bucket`. Could include folder path if needed like
+`gs://my-bucket/folder1`. If capturing profile programmatically or on-demand,
+this is required or else profile capture will error.
 
 `on-demand-xprof` Optional, if you want to enable on demand profiling, starts
 xprofz daemon on port `9999`. Note that you can enable on-demand profiling and
@@ -334,17 +336,14 @@ with open('config.yaml', 'r') as yaml_file:
   # Parse YAML into a Python dictionary
   yaml_data = yaml.safe_load(yaml_file)
 
-  # Convert the dictionary to a JSON
-  json_data = json.dumps(yaml_data)
-
 # Define machinlearning run
 machinelearning_run(
   name="<run_name>",
   run_group="<run_group>",
-  config=json_data, # or yaml_data
+  configs=yaml_data,
   project="<some_project>",
   region="<some_zone>",
-  path="gs://<some_bucket>",
+  gcs_path="gs://<some_bucket>",
 )
 ```
 
@@ -410,11 +409,11 @@ a profile for a few training steps, or profile a specific block of code within
 your model. For programmatic profile capture within ML Diagnostics SDK we offer
 3 options:
 
-- API-based Collection: control profiling with `start()` and `stop()` methods
-- Decorator-based Collection: annotate functions with `@xprof(run)` for automatic
-profiling
-- Context Manager: Use with `xprof()` for clean, scope-based profiling that
-automatically handles start/stop operations
+-   API-based Collection: control profiling with `start()` and `stop()` methods
+-   Decorator-based Collection: annotate functions with `@xprof(run)` for
+    automatic profiling
+-   Context Manager: Use with `xprof()` for clean, scope-based profiling that
+    automatically handles start/stop operations
 
 These methods are abstracted out from the framework-level APIs (JAX, Pytorch
 XLA, Tensorflow) for profile collection so you can use the same profile capture
@@ -480,7 +479,8 @@ be helpful when you see a problem with your model metrics during the run and
 want to capture profiles at that instant for some period in order to diagnose
 the problem.
 
-To enable feature customer needs to configure ML Run with on demand support, example:
+To enable feature customer needs to configure ML Run with on demand support,
+example:
 
 ```python
 # Define machinlearning run
