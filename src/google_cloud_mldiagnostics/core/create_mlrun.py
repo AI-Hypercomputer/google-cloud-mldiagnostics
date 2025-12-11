@@ -90,11 +90,21 @@ def initialize_mlrun(
 
   # Generate display name and name for the MLRun.
   # TODO: [INTERNAL] - Add support for non-GKE workloads.
+  display_name = name
   if orchestrator == "GKE":
-    display_name = name + "-" + workload_details["creation-timestamp"]
+    if not workload_details:
+      raise ValueError(
+          "Detected GKE environment but GKE metadata is missing. This might"
+          " be because environment variables 'GKE_DIAGON_IDENTIFIER' or"
+          " 'GKE_DIAGON_METADATA' are not set or are incomplete. Please"
+          " ensure you are running SDK in a GKE environment with the GKE"
+          " diagon operator webhook enabled. For more details on GKE"
+          " configuration, please see"
+          " https://github.com/AI-Hypercomputer/google-cloud-mldiagnostics?tab=readme-ov-file#configure-gke-cluster."
+      )
+    if workload_details.get("creation-timestamp"):
+      display_name = name + "-" + workload_details["creation-timestamp"]
     name = host_utils.get_identifier(workload_details)
-  else:
-    display_name = name
 
   # sanitize the name and use it as the MLRun name for the control plane.
   sanitized_name = host_utils.sanitize_identifier(name)
