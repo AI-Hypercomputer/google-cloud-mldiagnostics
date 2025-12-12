@@ -344,9 +344,8 @@ try:
           configs={ "epochs": 100, "batch_size": 32 },
           project="<some_project>",
           region="<some_zone>",
-          path="gs://<some_bucket>",
-          # enable on demand profiling, starts xprofz daemon on port 9999
-          on_demand_xprof=True
+          gcs_path="gs://<some_bucket>",
+          on_demand_xprof=True,
         )
     logging.info(f"MLRun created: {run.name}")
 
@@ -406,6 +405,19 @@ xprofz daemon on port `9999`. Note that you can enable on-demand profiling and
 also do programmatic profiling in the same code, but user needs to make sure
 that the on-demand capture time does not happen at the same time as the
 programmatic profile capture.
+
+`environment` Optional, defaults to `prod`. Used to specify the environment
+where the run metadata is stored.
+
+To test on a different environment, you can specify it using an environment
+variable:
+
+```python
+machinelearning_run(
+    # ...
+    environment=os.environ.get("ENV", "env")
+)
+```
 
 ### Write configs using yaml or json
 
@@ -656,15 +668,16 @@ When user deploys their workload with SDK, they will get a link to Console
 similar to below:
 
 To find this link as well as your MLrun name, first find your job name with
-namespace `diagon`:
+namespace `diagon` (or your workload's namespace):
 
 ```bash
-kubectl get job -n diagon
+kubectl get job -n <your-namespace>
 ```
 
 Then, find the MLrun name and link in your kubectl logs by passing this job name
-and namespace `diagon`
+and namespace. Note: You must specify the workload container (e.g., `-c workload`)
+because the Diagon sidecar handles its own logging.
 
 ```bash
-kubectl logs jobs/s5-tpu-slice-0 -n diagon
+kubectl logs jobs/s5-tpu-slice-0 -n <your-namespace> -c workload
 ```
