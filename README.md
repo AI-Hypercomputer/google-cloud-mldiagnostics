@@ -91,9 +91,17 @@ Enable Cluster Director API https://docs.cloud.google.com/endpoints/docs/openapi
 
 ### IAM Permissions
 
-IAM permissions on project:
-1. Cluster Director Editor (Beta) for full access (create MLRun and view UI)
-1. Or Cluster Director Viewer (Beta) for read only access (want to view UI and not create MLRun)
+The Google Service Account used by your workload requires the following IAM
+roles assigned on the project:
+
+1. `roles/clusterdirector.editor`: For full access to create and manage MLRun resources and view the UI.
+1. `roles/logging.logWriter`: To write logs and metrics to Google Cloud Logging.
+1. `roles/storage.objectUser`: To save profiles to the GCS bucket specified in `machinelearning_run`.
+
+For read-only access (viewing UI only, not creating MLRuns),
+`roles/clusterdirector.viewer` is sufficient.
+
+**GKE**: If your workload runs on GKE, we recommend using [Workload Identity](https://cloud.google.com/kubernetes-engine/docs/how-to/workload-identity) to associate a Kubernetes Service Account with a Google Service Account that has been granted the roles above.
 
 ### Google Storage Bucket
 
@@ -185,7 +193,10 @@ kubectl apply -f mldiagnostics-injection-webhook-v0.5.0.yaml -n gke-mldiagnostic
 
 #### Label workload
 
-To trigger the injection-webhook to inject metadata into pods, you need to label either the workload itself or its namespace with `managed-mldiagnostics-gke=true` before deploying the workload. You have two options:
+To trigger the injection-webhook to inject metadata into pods, you need to label
+either the workload itself or its namespace with
+`managed-mldiagnostics-gke=true` before deploying the workload. You have two
+options:
 
 1.  **Label a namespace:** This will enable the webhook for all Jobset/LWS/RayJob workloads within that namespace.
 
@@ -245,38 +256,113 @@ Pip install [SDK](https://pypi.org/project/google-cloud-mldiagnostics/)
 pip install google-cloud-mldiagnostics
 ```
 
-This package does not install `libtpu`, `jax` and `xprof` and user is expected
-to install these separately.
-
-Import SDK in the ML workload, instrument MLworkload to perform tracing and
-logging with Diagon SDK
-
-```python
-from google_cloud_mldiagnostics import machinelearning_run
-from google_cloud_mldiagnostics import metrics
-from google_cloud_mldiagnostics import xprof
-```
+This package does not install `libtpu`, `jax`, and `xprof`; you are expected to
+install these separately if needed for your workload.
 
 ## How to use
+
+### Enable Cloud Logging
+
+The SDK uses Python's standard `logging` module to output information. To route
+these logs to Google Cloud Logging, you need to install and configure the
+`google-cloud-logging` library. This allows you to view SDK logs, metrics
+written as logs, and your own application logs in the Google Cloud console.
+
+1.  **Install the library:**
+
+    ```bash
+    pip install google-cloud-logging
+    ```
+
+2.  **Configure logging in your script:**
+    Add the following lines to the beginning of your Python script to attach
+    the Cloud Logging handler to the Python root logger:
+
+    ```python
+    import logging
+    import google.cloud.logging
+
+    # Instantiate a Cloud Logging client
+    logging_client = google.cloud.logging.Client()
+
+    # Attaches the Cloud Logging handler to the Python root logger
+    logging_client.setup_logging()
+
+    # Now, standard logging calls will go to Cloud Logging
+    logging.info("SDK logs and application logs will appear in Cloud Logging.")
+    ```
+
+### Enable Debug Logging
+By default, the logging level is set to `INFO`. To see more detailed logs from
+the SDK, such as MLRun details, you can set the logging level to `DEBUG` *after*
+calling `setup_logging()`:
+
+```python
+import logging
+import google.cloud.logging
+
+logging_client = google.cloud.logging.Client()
+logging_client.setup_logging()
+logging.getLogger().setLevel(logging.DEBUG) # Enable DEBUG level logs
+
+logging.debug("This is a debug message.")
+logging.info("This is an info message.")
+```
+With `DEBUG` level enabled, you will see additional SDK diagnostics in Cloud
+Logging, for example:
+```
+DEBUG:google_cloud_mldiagnostics.core.global_manager:current run details: {'name': 'projects/my-gcp-project/locations/us-central1/mlRuns/my-run-12345', 'gcs_path': 'gs://my-bucket/profiles', ...}
+```
 
 ### Creating a machine learning run
 
 In order to use Google Cloud ML Diagnostics platform, you will need to create a
-machine learning run. Import SDK in the ML workload, instrument MLworkload to
-perform logging and enable on-demand profile tracing with ML Diagnostics SDK
+machine learning run. This requires instrumenting your ML workload with the SDK
+to perform logging, metric collection, and profile tracing.
+
+Below is a basic example of how to initialize Cloud Logging, create an MLRun,
+record metrics, and capture a profile:
 
 ```python
-# Define machinlearning run
-machinelearning_run(
-  name="<run_name>",
-  run_group="<run_group>",
-  configs={ "epochs": 100, "batch_size": 32 },
-  project="<some_project>",
-  region="<some_zone>",
-  gcs_path="gs://<some_bucket>",
-  # enable on demand profiling, starts xprofz daemon on port 9999
-  on_demand_xprof=True
-)
+import logging
+import os
+import google.cloud.logging
+from google_cloud_mldiagnostics import machinelearning_run, metrics, xprof, metric_types
+
+# 1. Set up Cloud Logging
+# Make sure to pip install google-cloud-logging
+logging_client = google.cloud.logging.Client()
+logging_client.setup_logging()
+# Optional: Set logging level to DEBUG for more detailed SDK logs
+# logging.getLogger().setLevel(logging.DEBUG)
+
+# 2. Define and start machinlearning run
+try:
+    run = machinelearning_run(
+          name="<run_name>",
+          run_group="<run_group>",
+          configs={ "epochs": 100, "batch_size": 32 },
+          project="<some_project>",
+          region="<some_zone>",
+          path="gs://<some_bucket>",
+          # enable on demand profiling, starts xprofz daemon on port 9999
+          on_demand_xprof=True
+        )
+    logging.info(f"MLRun created: {run.name}")
+
+    # 3. Collect metrics during your run
+    metrics.record(metric_types.MetricType.LOSS, 0.123, step=1)
+    logging.info("Loss metric recorded.")
+
+    # 4. Capture profiles programmatically
+    with xprof():
+        # ... your code to profile here ...
+        pass
+    logging.info("Profile captured.")
+
+except Exception as e:
+    logging.error(f"Error during MLRun: {e}", exc_info=True)
+
 ```
 
 `name` Required. A unique identifier for this specific run. SDK will
@@ -504,6 +590,48 @@ operator along with injection webhook into the GKE cluster (see prereq section).
 This will ensure that your machine learning run knows which GKE nodes it is
 running on and so on-demand capture drop down can auto populate these nodes
 automatically.
+
+### Viewing Logs, Metrics and Profiles
+
+Once your workload is running with the SDK and Cloud Logging configured:
+
+*   **Logs and Metrics**: Can be viewed in the Google Cloud Console under
+**Logging > Logs Explorer**. Metrics recorded via `metrics.record()` are written
+as log entries and can be filtered or used to create log-based metrics.
+*   **Profiles and Run Details**: Can be viewed in the **Cluster Director**
+section of the Google Cloud Console. The `machinelearning_run()` function will
+output a log message containing a direct link to the run in the UI.
+
+### Dockerfile Example
+
+Below is an example Dockerfile snippet for packaging an application that uses
+the `google-cloud-mldiagnostics` SDK. Remember to include `google-cloud-logging`
+for Cloud Logging integration.
+
+```dockerfile
+# Base image (user's choice, e.g., python:3.10-slim, or a base with ML frameworks)
+FROM python:3.11-slim
+
+# Install base utilities
+RUN pip install --no-cache-dir --upgrade pip
+
+# Install SDK and Logging client
+# psutil is installed as a dependency of google-cloud-mldiagnostics
+RUN pip install --no-cache-dir \
+    google-cloud-mldiagnostics \
+    google-cloud-logging
+
+# Optional: For JAX/TPU workloads
+# RUN pip install --no-cache-dir "jax[tpu]" -f https://storage.googleapis.com/jax-releases/libtpu_releases.html && \
+#     pip install --no-cache-dir libtpu xprof
+
+# Add your application code
+COPY ./app /app
+WORKDIR /app
+
+# Run your script
+CMD ["python", "your_train_script.py"]
+```
 
 ## Deploy Workload with SDK integrated
 
