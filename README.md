@@ -555,6 +555,22 @@ prof.start()
 prof.stop()
 ```
 
+By default, calling `prof.start()` without a `session_id` on multiple hosts will
+result in separate trace sessions—one for each host. To group traces from
+different hosts into a single, unified multi-host session in XProf, you must
+ensure that `prof.start()` is called with the *same* `session_id` on all
+participating hosts.
+
+You can achieve this by passing a consistent session ID string, for example:
+
+```python
+# Use the same session_id on all hosts to group traces
+prof = xprof()
+prof.start(session_id="profiling_session")
+# ...
+prof.stop()
+```
+
 Additionally SDK provides way to enable profiling only for specific hosts
 (processes):
 

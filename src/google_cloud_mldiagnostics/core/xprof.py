@@ -14,6 +14,7 @@
 
 """JAX profiling SDK wrapper for Google Cloud ML Diagnostics."""
 
+import datetime
 import logging
 import threading
 
@@ -100,8 +101,13 @@ class Xprof:
 
     self._initialized = True
 
-  def start(self):
-    """Starts the JAX profiler."""
+  def start(self, session_id: str | None = None) -> None:
+    """Starts the JAX profiler.
+
+    Args:
+        session_id: The session ID to use for the profiling session. If None,
+          use the current timestamp.
+    """
     # Ensure initialization happens before starting
     self._ensure_initialized()
 
@@ -109,17 +115,34 @@ class Xprof:
       logger.warning("Profiling is already active. Call stop() first.")
       return
 
-    logger.info("Starting JAX profiling to: %s", self._gcs_profile_dir)
-    if self._should_profile:
-      try:
-        jax.profiler.start_trace(self._gcs_profile_dir)
-        self._is_profiling = True
-        logger.info("profiling_status: started")
-      except exceptions.ProfilingError as e:
-        logger.error("Error starting JAX profiler: %s", e)
-        self._is_profiling = False
-    else:
+    if not self._should_profile:
       logger.info("profiling_status: skipped")
+      return
+
+    logger.info("Starting JAX profiling to: %s", self._gcs_profile_dir)
+    try:
+      options = jax.profiler.ProfileOptions()
+      if session_id is None:
+        effective_session_id = datetime.datetime.now().strftime(
+            "%Y%m%d_%H%M%S_%f"
+        )
+        logger.debug(
+            "Programmatic profiling session_id not provided, generated"
+            " session_id using current timestamp: %s",
+            effective_session_id,
+        )
+      else:
+        effective_session_id = session_id
+        logger.debug(
+            "Programmatic profiling session_id set to: %s", effective_session_id
+        )
+      options.session_id = effective_session_id
+      jax.profiler.start_trace(self._gcs_profile_dir, profiler_options=options)
+      self._is_profiling = True
+      logger.info("profiling_status: started")
+    except exceptions.ProfilingError as e:
+      logger.error("Error starting JAX profiler: %s", e)
+      self._is_profiling = False
 
   def stop(self):
     """Stops the JAX profiler."""
