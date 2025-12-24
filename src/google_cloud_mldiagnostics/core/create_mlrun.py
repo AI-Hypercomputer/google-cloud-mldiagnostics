@@ -158,7 +158,7 @@ def initialize_mlrun(
                     {
                         "hostname": host_utils.get_hostname(),
                         "process_index": str(host_utils.get_process_index()),
-                        "unit": "percent per chip",
+                        "unit": "%",
                     },
                 ),
                 (
@@ -167,7 +167,7 @@ def initialize_mlrun(
                     {
                         "hostname": host_utils.get_hostname(),
                         "process_index": str(host_utils.get_process_index()),
-                        "unit": "percent per chip",
+                        "unit": "%",
                     },
                 ),
                 (
@@ -176,7 +176,7 @@ def initialize_mlrun(
                     {
                         "hostname": host_utils.get_hostname(),
                         "process_index": str(host_utils.get_process_index()),
-                        "unit": "percent per core",
+                        "unit": "%",
                     },
                 ),
                 (
@@ -185,7 +185,7 @@ def initialize_mlrun(
                     {
                         "hostname": host_utils.get_hostname(),
                         "process_index": str(host_utils.get_process_index()),
-                        "unit": "percent per host",
+                        "unit": "%",
                     },
                 ),
                 (
@@ -194,7 +194,7 @@ def initialize_mlrun(
                     {
                         "hostname": host_utils.get_hostname(),
                         "process_index": str(host_utils.get_process_index()),
-                        "unit": "percent per host",
+                        "unit": "%",
                     },
                 ),
             ],

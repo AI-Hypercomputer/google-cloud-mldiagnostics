@@ -119,7 +119,9 @@ class _MetricsRecorder:
       current_mlrun, ml_logging_client = self._get_active_run_and_client()
       is_master_host = host_utils.is_master_host()
       if is_master_host or record_on_all_hosts:
-
+        all_labels = labels.copy() if labels else {}
+        unit = metric_types.METRIC_UNITS.get(metric_name, "1")
+        all_labels.setdefault("unit", unit)
         # Record the metric using logging client
         ml_logging_client.write_metric(
             metric_name=metric_name,
@@ -127,7 +129,7 @@ class _MetricsRecorder:
             run_id=current_mlrun.name,
             location=current_mlrun.location,
             step=step,
-            labels=labels,
+            labels=all_labels,
         )
 
       # Update the metric tracker

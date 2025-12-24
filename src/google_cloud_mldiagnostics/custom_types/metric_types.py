@@ -44,3 +44,21 @@ class MetricType(enum.Enum):
   # other metrics with step information. However, if there is a need to record
   # step separate, use this metric type.
   STEP = "step"
+
+METRIC_UNITS = {
+    MetricType.LEARNING_RATE.value: "1",
+    MetricType.LOSS.value: "1",
+    MetricType.GRADIENT_NORM.value: "1",
+    MetricType.TOTAL_WEIGHTS.value: "1",
+    MetricType.STEP_TIME.value: "s",
+    MetricType.THROUGHPUT.value: "1/s",
+    MetricType.LATENCY.value: "s",
+    MetricType.MFU.value: "%",
+    MetricType.TFLOPS.value: "TFLOPS",
+    MetricType.TPU_DUTY_CYCLE.value: "%",
+    MetricType.TPU_TENSORCORE_UTILIZATION.value: "%",
+    MetricType.HBM_UTILIZATION.value: "%",
+    MetricType.HOST_CPU_UTILIZATION.value: "%",
+    MetricType.HOST_MEMORY_UTILIZATION.value: "%",
+    MetricType.STEP.value: "1",
+}
