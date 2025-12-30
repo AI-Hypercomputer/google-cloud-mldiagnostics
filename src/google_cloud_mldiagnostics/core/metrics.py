@@ -15,6 +15,7 @@
 """Module for recording metrics within ML runs."""
 
 import logging
+import statistics
 import threading
 from typing import Any, Callable, List, Optional, Tuple, Union
 
@@ -40,6 +41,8 @@ class _MetricsRecorder:
         metric_types.MetricType.MFU.value,
         metric_types.MetricType.THROUGHPUT.value,
         metric_types.MetricType.LATENCY.value,
+        metric_types.MetricType.HBM_UTILIZATION.value,
+        metric_types.MetricType.TPU_TENSORCORE_UTILIZATION.value,
     )
     self._metric_tracker: dict[str, dict[str, Any]] = {}
     self._ml_run_name = None
@@ -91,13 +94,13 @@ class _MetricsRecorder:
   def record(
       self,
       metric_name: str,
-      value: int | float,
+      value: int | float | List[float] | None,
       step: int | None = None,
       labels: dict[str, str] | None = None,
       record_on_all_hosts: bool = False,
   ) -> None:
-    """Record a single metric value.
-
+    """Record a single metric value, averaging lists if provided.
+    
     Args:
         metric_name: Name of metric to record.
         value: Metric value.
@@ -111,7 +114,31 @@ class _MetricsRecorder:
     Raises:
         RecordingError: If recording fails (except for rate limiting errors).
     """
-    if not value:
+    if value is None:
+      logger.debug("Received None value for metric %s", metric_name)
+      return
+
+    metric_value: float
+    if isinstance(value, list):
+      if not value:  # Handle empty list
+        logger.debug("Received empty list for metric %s", metric_name)
+        return
+      try:
+        metric_value = statistics.mean(value)
+      except statistics.StatisticsError as e:
+        logger.warning(
+            "Failed to calculate mean for metric %s with value %s: %s",
+            metric_name,
+            value,
+            e,
+        )
+        return
+    elif isinstance(value, (int, float)):
+      metric_value = float(value)
+    else:
+      logger.warning(
+          "Unsupported metric value type for %s: %s", metric_name, type(value)
+      )
       return
 
     try:
@@ -125,7 +152,7 @@ class _MetricsRecorder:
         # Record the metric using logging client
         ml_logging_client.write_metric(
             metric_name=metric_name,
-            value=value,
+            value=metric_value,
             run_id=current_mlrun.name,
             location=current_mlrun.location,
             step=step,
@@ -135,12 +162,14 @@ class _MetricsRecorder:
       # Update the metric tracker
       if metric_name in self._track_list:
         if metric_name not in self._metric_tracker:
-          self._metric_tracker[metric_name] = {"num_records": 1, "avg": value}
+          self._metric_tracker[metric_name] = {
+              "num_records": 1,
+              "avg": metric_value,
+          }
         else:
           num_records = self._metric_tracker[metric_name]["num_records"]
           avg = self._metric_tracker[metric_name]["avg"]
-          # Update the averaged metric value
-          avg = (avg * num_records + value) / (num_records + 1)
+          avg = (avg * num_records + metric_value) / (num_records + 1)
           self._metric_tracker[metric_name] = {
               "num_records": num_records + 1,
               "avg": avg,
@@ -162,7 +191,11 @@ class MetricsRecorderThread:
   def __init__(
       self,
       metric_collectors: List[
-          Tuple[str, Callable[[], Union[int, float]], Optional[dict[str, str]]]
+          Tuple[
+              str,
+              Callable[[], Union[int, float, List[float], None]],
+              Optional[dict[str, str]],
+          ]
       ],
       interval_seconds: float,
   ):
@@ -298,14 +331,11 @@ class MetricsRecorderThread:
         step_time_avg = metrics_tracker[
             metric_types.MetricType.STEP_TIME.value
         ]["avg"]
-        metrics_avg["avgStep"] = (
-            str(round(step_time_avg, 9))
-            + "s"
-        )
+        metrics_avg["avgStep"] = str(round(step_time_avg, 9)) + "s"
       if metric_types.MetricType.MFU.value in metrics_tracker:
         metrics_avg["avgMfu"] = metrics_tracker[
             metric_types.MetricType.MFU.value
-            ]["avg"]
+        ]["avg"]
       if metric_types.MetricType.THROUGHPUT.value in metrics_tracker:
         metrics_avg["avgThroughput"] = metrics_tracker[
             metric_types.MetricType.THROUGHPUT.value
@@ -314,15 +344,24 @@ class MetricsRecorderThread:
         latency_avg = metrics_tracker[metric_types.MetricType.LATENCY.value][
             "avg"
         ]
-        metrics_avg["avgLatency"] = (
-            str(round(latency_avg, 9))
-            + "s"
-        )
+        metrics_avg["avgLatency"] = str(round(latency_avg, 9)) + "s"
+      if metric_types.MetricType.HBM_UTILIZATION.value in metrics_tracker:
+        metrics_avg["avgHbmUtilization"] = metrics_tracker[
+            metric_types.MetricType.HBM_UTILIZATION.value
+        ]["avg"]
+      if (
+          metric_types.MetricType.TPU_TENSORCORE_UTILIZATION.value
+          in metrics_tracker
+      ):
+        metrics_avg["avgTpuTensorcoreUtilization"] = metrics_tracker[
+            metric_types.MetricType.TPU_TENSORCORE_UTILIZATION.value
+        ]["avg"]
 
-      control_plane_client_instance.update_ml_run(
-          name=ml_run.name,
-          metrics=metrics_avg,
-      )
+      if metrics_avg:
+        control_plane_client_instance.update_ml_run(
+            name=ml_run.name,
+            metrics=metrics_avg,
+        )
 
 
 # Global metrics recorder instance
