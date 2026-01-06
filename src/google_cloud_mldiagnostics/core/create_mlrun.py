@@ -159,6 +159,9 @@ def initialize_mlrun(
                         "hostname": host_utils.get_hostname(),
                         "process_index": str(host_utils.get_process_index()),
                         "unit": "%",
+                        "accelerator_type": (
+                            metric_types.AcceleratorType.TPU.value
+                        ),
                     },
                 ),
                 (
@@ -168,6 +171,9 @@ def initialize_mlrun(
                         "hostname": host_utils.get_hostname(),
                         "process_index": str(host_utils.get_process_index()),
                         "unit": "%",
+                        "accelerator_type": (
+                            metric_types.AcceleratorType.TPU.value
+                        ),
                     },
                 ),
                 (
@@ -177,6 +183,9 @@ def initialize_mlrun(
                         "hostname": host_utils.get_hostname(),
                         "process_index": str(host_utils.get_process_index()),
                         "unit": "%",
+                        "accelerator_type": (
+                            metric_types.AcceleratorType.TPU.value
+                        ),
                     },
                 ),
                 (

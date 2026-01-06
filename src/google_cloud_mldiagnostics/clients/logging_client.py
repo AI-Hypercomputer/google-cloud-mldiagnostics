@@ -113,6 +113,16 @@ class LoggingClient:
       if isinstance(value, (int, float)):
         value = [value]
       payload = {"values": value}
+      if (
+          labels
+          and {"hostname", "accelerator_type"}.issubset(labels)
+          and isinstance(value, list)
+      ):
+        hostname = labels["hostname"]
+        accelerator_type = labels["accelerator_type"]
+        payload["accelerator_labels"] = [
+            f"{hostname}-{accelerator_type}{i}" for i, _ in enumerate(value)
+        ]
 
       # Add optional fields
       if step is not None:

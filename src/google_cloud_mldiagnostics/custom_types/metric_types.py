@@ -62,3 +62,8 @@ METRIC_UNITS = {
     MetricType.HOST_MEMORY_UTILIZATION.value: "%",
     MetricType.STEP.value: "1",
 }
+
+
+class AcceleratorType(enum.Enum):
+  """Accelerator types."""
+  TPU = "tpu"
