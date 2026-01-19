@@ -131,13 +131,11 @@ def initialize_mlrun(
 
   diagon_url = create_diagnostics_url(region, project, sanitized_name)
   xprof_url = create_xprof_url(diagon_url)
+  logging.info("MLRun '%s' created successfully.", ml_run.display_name)
+  logging.info("Diagon URL: %s : %s", ml_run.display_name, diagon_url)
   logging.info(
-      "Diagon SDK is in experimental mode, to visualize the run, please go to\n"
-      "%s\n",
-      diagon_url,
-  )
-  logging.info(
-      "Xprof profiling url:\n%s\n",
+      "Xprof URL: %s : %s",
+      ml_run.display_name,
       xprof_url,
   )
 

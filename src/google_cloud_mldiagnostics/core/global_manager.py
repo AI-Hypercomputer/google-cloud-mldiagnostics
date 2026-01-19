@@ -88,7 +88,7 @@ class GlobalRunManager:
         try:
           response = self._control_plane_client.create_ml_run(
               name=mlrun.name,
-              display_name=mlrun.name,
+              display_name=mlrun.display_name,
               run_phase=str(mlrun.run_phase.value),
               run_group=mlrun.run_group,
               configs=mlrun.configs,
