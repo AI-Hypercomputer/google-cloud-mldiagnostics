@@ -85,7 +85,7 @@ class MLRun:
   location: str = "us-central1"
   project: str = "supercomputer-testing"
 
-  # Fields assgined/updated by SDK
+  # Fields assigned/updated by SDK
   run_phase: RunPhase = RunPhase.PHASE_ACTIVE
 
   # Fields computed during initialization (excluded from __init__)

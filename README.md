@@ -336,7 +336,7 @@ logging_client.setup_logging()
 # Optional: Set logging level to DEBUG for more detailed SDK logs
 # logging.getLogger().setLevel(logging.DEBUG)
 
-# 2. Define and start machinlearning run
+# 2. Define and start machinelearning run
 try:
     run = machinelearning_run(
           name="<run_name>",
@@ -434,7 +434,7 @@ with open('config.yaml', 'r') as yaml_file:
   # Parse YAML into a Python dictionary
   yaml_data = yaml.safe_load(yaml_file)
 
-# Define machinlearning run
+# Define machinelearning run
 machinelearning_run(
   name="<run_name>",
   run_group="<run_group>",
@@ -597,7 +597,7 @@ To enable feature customer needs to configure ML Run with on demand support,
 example:
 
 ```python
-# Define machinlearning run
+# Define machinelearning run
 machinelearning_run(
     name="<run_name>",
     # specify where profiling data will be stored
