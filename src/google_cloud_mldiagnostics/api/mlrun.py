@@ -52,7 +52,7 @@ def normalize_gcs_path(gcs_path):
 
 # List of supported regions for MLRun - New supported regions can be added here
 # to expand the region list as required in future.
-SUPPORTED_REGIONS = ["us-central1", "us-east5", "europe-west4"]
+SUPPORTED_REGIONS = ["us-central1"]
 
 
 # Main SDK function - this is the primary interface users will import
