@@ -166,10 +166,7 @@ kubectl delete -f https://github.com/cert-manager/cert-manager/releases/download
 #### Install injection-webhook
 
 ```bash
-helm install mldiagnostics-injection-webhook \
-   --namespace=gke-mldiagnostics \
-   --create-namespace \
-oci://us-docker.pkg.dev/ai-on-gke/mldiagnostics-webhook-and-operator-helm/mldiagnostics-injection-webhook
+helm install mldiagnostics-injection-webhook --namespace=gke-mldiagnostics --create-namespace oci://us-docker.pkg.dev/ai-on-gke/mldiagnostics-webhook-and-operator-helm/mldiagnostics-injection-webhook
 ## Uninstall. First, uninstall MutatingWebhookConfiguration, then uninstall helm charts.
 # kubectl delete MutatingWebhookConfiguration mldiagnostics-injection-webhook-mutating-webhook-config
 # helm uninstall mldiagnostics-injection-webhook -n gke-mldiagnostics
