@@ -14,6 +14,7 @@
 
 """Module for recording metrics."""
 
+from typing import Any, Dict, List
 from google_cloud_mldiagnostics.core import metrics
 from google_cloud_mldiagnostics.custom_types import metric_types
 
@@ -45,8 +46,52 @@ def record(
       metrics.record(MetricType.LEARNING_RATE, learning_rate)
       metrics.record(MetricType.LEARNING_RATE, learning_rate, step=1)
   """
-  is_enum = isinstance(metric_name, metric_types.MetricType)
-  metric_name = metric_name.value if is_enum else metric_name
-  _metrics_recorder.record(
-      metric_name, value, step, labels, record_on_all_hosts
+  record_metrics(
+      metrics_data=[{
+          "metric_name": metric_name,
+          "value": value,
+          "step": step,
+          "labels": labels,
+      }],
+      record_on_all_hosts=record_on_all_hosts,
   )
+
+
+def record_metrics(
+    metrics_data: List[Dict[str, Any]],
+    record_on_all_hosts: bool = False,
+    step: int | None = None,
+) -> None:
+  """Record multiple metrics using the active run.
+
+  Args:
+      metrics_data: A list of dictionaries, where each dictionary represents a
+        metric and contains 'metric_name' (MetricType or str) and 'value'
+        (int, float, or list), and optionally 'step' (int) and 'labels'
+        (dict).
+      record_on_all_hosts: Whether to record metrics on all hosts.
+      step: Optional step number to apply to all metrics that don't have one.
+
+  Raises:
+      RecordingError: If no active run or recording fails.
+
+  Example:
+      metrics.record_metrics([
+          {'metric_name': metric_types.MetricType.TF_FLOPS, 'value': 123.4},
+          {'metric_name': 'custom_metric', 'value': 56.7, 'step': 1},
+      ])
+      metrics.record_metrics([
+          {'metric_name': metric_types.MetricType.TF_FLOPS, 'value': 123.4},
+          {'metric_name': 'custom_metric', 'value': 56.7},
+      ], step=1)
+  """
+  processed_metrics_data = []
+  for metric_info in metrics_data:
+    metric_name = metric_info.get("metric_name")
+    if isinstance(metric_name, metric_types.MetricType):
+      metric_info["metric_name"] = metric_name.value
+    if step is not None and "step" not in metric_info:
+      metric_info["step"] = step
+    processed_metrics_data.append(metric_info)
+
+  _metrics_recorder.record_metrics(processed_metrics_data, record_on_all_hosts)
