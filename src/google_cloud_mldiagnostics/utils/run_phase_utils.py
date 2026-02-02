@@ -23,6 +23,7 @@ control plane.
 
 import atexit
 import logging
+import signal
 import sys
 import threading
 from typing import Callable
@@ -85,6 +86,29 @@ class RunPhaseMonitor:
         self.exit_cleanup()
         self.update_ml_run_with_phase(mlrun_types.RunPhase.PHASE_COMPLETED)
 
+  def _handle_sigterm(self, signum, unused_frame) -> None:
+    """Handles SIGTERM signal for graceful shutdown.
+
+    Args:
+      signum: The signal number.
+      unused_frame: The current stack frame, which is not used.
+    """
+    with self._lock:
+      if not self._monitoring_started:
+        return
+      logger.warning(
+          "SIGTERM received (signum: %s). Start diagon sdk shutdown...",
+          signum,
+      )
+      try:
+        self.exit_cleanup()
+        self.update_ml_run_with_phase(mlrun_types.RunPhase.PHASE_FAILED)
+      except Exception:  # pylint: disable=broad-except-catching
+        logger.exception("Exception during SIGTERM handler execution.")
+      logger.info(
+          "Diagon SDK graceful shutdown complete due to SIGTERM. Exiting."
+      )
+
   def update_ml_run_with_phase(self, run_phase: mlrun_types.RunPhase):
     """Sends a signal to the control plane if on master host."""
     if (
@@ -106,6 +130,7 @@ class RunPhaseMonitor:
       logger.info("Starting run phase monitoring...")
       sys.excepthook = self._handle_unhandled_exception
       atexit.register(self._on_normal_exit)
+      signal.signal(signal.SIGTERM, self._handle_sigterm)
       self._monitoring_started = True
       logger.info("Run phase monitoring is active.")
 
