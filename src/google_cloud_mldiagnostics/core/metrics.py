@@ -17,7 +17,7 @@
 import logging
 import statistics
 import threading
-from typing import Any, Callable, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from google_cloud_mldiagnostics.clients import control_plane_client
 from google_cloud_mldiagnostics.clients import logging_client
@@ -118,46 +118,89 @@ class _MetricsRecorder:
       logger.debug("Received None value for metric %s", metric_name)
       return
 
-    metric_value: float
-    if isinstance(value, list):
-      if not value:  # Handle empty list
-        logger.debug("Received empty list for metric %s", metric_name)
-        return
-      try:
-        metric_value = statistics.mean(value)
-      except statistics.StatisticsError as e:
-        logger.warning(
-            "Failed to calculate mean for metric %s with value %s: %s",
-            metric_name,
-            value,
-            e,
-        )
-        return
-    elif isinstance(value, (int, float)):
-      metric_value = float(value)
-    else:
-      logger.warning(
-          "Unsupported metric value type for %s: %s", metric_name, type(value)
-      )
-      return
+    self.record_metrics(
+        metrics_data=[{
+            "metric_name": metric_name,
+            "value": value,
+            "step": step,
+            "labels": labels,
+        }],
+        record_on_all_hosts=record_on_all_hosts,
+    )
 
+  def get_metric_tracker(self) -> dict[str, dict[str, Any]]:
+    """Get the metric tracker."""
+    return self._metric_tracker
+
+  def record_metrics(
+      self,
+      metrics_data: List[Dict[str, Any]],
+      record_on_all_hosts: bool = False,
+  ) -> None:
+    """Record multiple metric values.
+
+    Args:
+        metrics_data: A list of dictionaries, where each dictionary
+          represents a metric and contains 'metric_name' (str) and 'value'
+          (int, float, or list), and optionally 'step' (int) and 'labels'
+          (dict).
+        record_on_all_hosts: Whether to record metrics on all hosts.
+
+    Raises:
+        RecordingError: If recording fails.
+    """
     try:
-      # Get active run and client from global manager
       current_mlrun, ml_logging_client = self._get_active_run_and_client()
       is_master_host = host_utils.is_master_host()
+    except Exception as e:
+      raise exceptions.RecordingError(f"Error preparing to record metrics: {e}") from e
+
+    metrics_to_write = []
+    for metric_info in metrics_data:
+      metric_name = metric_info.get("metric_name")
+      value = metric_info.get("value")
+      step = metric_info.get("step")
+      labels = metric_info.get("labels")
+
+      if metric_name is None or value is None:
+        logger.warning("Skipping metric with missing name or value.")
+        continue
+
+      metric_value: float
+      if isinstance(value, list):
+        if not value:
+          logger.warning("Received empty list for metric %s", metric_name)
+          continue
+        try:
+          metric_value = statistics.mean(value)
+        except statistics.StatisticsError as e:
+          logger.warning(
+              "Failed to calculate mean for metric %s with value %s: %s",
+              metric_name,
+              value,
+              e,
+          )
+          continue
+      elif isinstance(value, (int, float)):
+        metric_value = float(value)
+      else:
+        logger.warning(
+            "Unsupported metric value type for %s: %s",
+            metric_name,
+            type(value),
+        )
+        continue
+
       if is_master_host or record_on_all_hosts:
         all_labels = labels.copy() if labels else {}
         unit = metric_types.METRIC_UNITS.get(metric_name, "1")
         all_labels.setdefault("unit", unit)
-        # Record the metric using logging client
-        ml_logging_client.write_metric(
-            metric_name=metric_name,
-            value=metric_value,
-            run_id=current_mlrun.name,
-            location=current_mlrun.location,
-            step=step,
-            labels=all_labels,
-        )
+        metrics_to_write.append({
+            "metric_name": metric_name,
+            "value": metric_value,
+            "step": step,
+            "labels": all_labels,
+        })
 
       # Update the metric tracker
       if metric_name in self._track_list:
@@ -175,14 +218,17 @@ class _MetricsRecorder:
               "avg": avg,
           }
 
-    except Exception as e:  # pylint: disable=broad-exception-caught
-      raise exceptions.RecordingError(
-          "Error recording metric %s: %s" % (metric_name, e)
-      ) from e
-
-  def get_metric_tracker(self) -> dict[str, dict[str, Any]]:
-    """Get the metric tracker."""
-    return self._metric_tracker
+    if metrics_to_write:
+      try:
+        ml_logging_client.write_metrics(
+            metrics=metrics_to_write,
+            run_id=current_mlrun.name,
+            location=current_mlrun.location,
+        )
+      except Exception as e:
+        raise exceptions.RecordingError(
+            "Error recording metrics batch: %s" % e
+        ) from e
 
 
 class MetricsRecorderThread:
