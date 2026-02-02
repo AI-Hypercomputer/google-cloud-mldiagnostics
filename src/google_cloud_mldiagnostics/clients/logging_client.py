@@ -17,7 +17,7 @@
 import datetime
 import logging
 import os
-from typing import List, Optional
+from typing import Any, Optional
 
 from google.auth import credentials
 from google.cloud import logging as cloud_logging
@@ -74,7 +74,7 @@ class LoggingClient:
   def write_metric(
       self,
       metric_name: str,
-      value: float | int | List[float | int],
+      value: float | int | list[float | int],
       run_id: str,
       location: str,
       step: Optional[int] = None,
@@ -94,55 +94,92 @@ class LoggingClient:
     Returns:
         True if the metric was written successfully, False otherwise.
     """
+    self.write_metrics(
+        metrics=[{
+            "metric_name": metric_name,
+            "value": value,
+            "step": step,
+            "labels": labels,
+        }],
+        run_id=run_id,
+        location=location,
+    )
+
+  def write_metrics(
+      self,
+      metrics: list[dict[str, Any]],
+      run_id: str,
+      location: str,
+  ):
+    """Write multiple metric points to Cloud Logging in a batch.
+
+    Args:
+        metrics: A list of dicts, where each dict contains 'metric_name',
+            'value', 'step', and 'labels'.
+        run_id: ML run identifier
+        location: ML run region
+
+    Raises:
+        MLDiagnosticError: If writing to Cloud Logging fails.
+    """
     try:
-      # Create timestamp
       current_time = datetime.datetime.now(datetime.timezone.utc)
+      with self.logger.batch() as batch:
+        for metric in metrics:
+          metric_name = metric["metric_name"]
+          value = metric["value"]
+          step = metric.get("step")
+          labels = metric.get("labels")
 
-      # Define the resource for the log entry
-      metric_resource = resource.Resource(
-          type="generic_node",
-          labels={
-              "project_id": self.project_id,
-              "location": location,
-              "namespace": metric_name,
-              "node_id": run_id,
-          },
-      )
+          metric_resource = resource.Resource(
+              type="generic_node",
+              labels={
+                  "project_id": self.project_id,
+                  "location": location,
+                  "namespace": metric_name,
+                  "node_id": run_id,
+              },
+          )
 
-      # Build the log payload structure
-      if isinstance(value, (int, float)):
-        value = [value]
-      payload = {"values": value}
-      if (
-          labels
-          and {"hostname", "accelerator_type"}.issubset(labels)
-          and isinstance(value, list)
-      ):
-        hostname = labels["hostname"]
-        accelerator_type = labels["accelerator_type"]
-        payload["accelerator_labels"] = [
-            f"{hostname}-{accelerator_type}{i}" for i, _ in enumerate(value)
-        ]
+          if isinstance(value, (int, float)):
+            payload_values = [value]
+          elif isinstance(value, list):
+            payload_values = value
+          else:
+            logger.warning(
+                "Skipping metric %s due to unsupported value type: %s",
+                metric_name,
+                type(value),
+            )
+            continue
+          payload = {"values": payload_values}
 
-      # Add optional fields
-      if step is not None:
-        payload["step_index"] = step
-      if labels:
-        payload.update(labels)
+          if (
+              labels
+              and {"hostname", "accelerator_type"}.issubset(labels)
+          ):
+            hostname = labels["hostname"]
+            accelerator_type = labels["accelerator_type"]
+            payload["accelerator_labels"] = [
+                f"{hostname}-{accelerator_type}{i}"
+                for i, _ in enumerate(payload_values)
+            ]
 
-      # Write to Cloud Logging
-      self.logger.log_struct(
-          payload,
-          severity="INFO",
-          timestamp=current_time,
-          resource=metric_resource,
-      )
+          if step is not None:
+            payload["step_index"] = step
+          if labels:
+            payload.update(labels)
 
-      logger.info("Successfully written metric to log: %s", metric_name)
-
+          batch.log_struct(
+              payload,
+              severity="INFO",
+              timestamp=current_time,
+              resource=metric_resource,
+          )
+      logger.info("Successfully written %d metrics in batch.", len(metrics))
     except Exception as e:
       raise exceptions.MLDiagnosticError(
-          f"Failed to write to Cloud Logging: {e}"
+          f"Failed to write metrics batch to Cloud Logging: {e}"
       ) from e
 
 
@@ -156,11 +193,20 @@ class NoOpLoggingClient(LoggingClient):
   def write_metric(
       self,
       metric_name: str,
-      value: float | int | List[float | int],
+      value: float | int | list[float | int],
       run_id: str,
       location: str,
       step: Optional[int] = None,
       labels: Optional[dict[str, str]] = None,
+  ):
+    """This is a no-op and does not write any metrics."""
+    pass
+
+  def write_metrics(
+      self,
+      metrics: list[dict[str, Any]],
+      run_id: str,
+      location: str,
   ):
     """This is a no-op and does not write any metrics."""
     pass
