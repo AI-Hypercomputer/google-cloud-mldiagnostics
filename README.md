@@ -448,10 +448,18 @@ The SDK allows users to collect model metrics, model perf metrics and system
 metrics and visualize these as both average values as well as time series
 charts.
 
-The record function captures individual data points and writes them to Cloud
-Logging, enabling subsequent visualization and analysis of the metrics.
+The SDK provides two functions for recording metrics: `metrics.record()` for
+capturing individual data points, and `metrics.record_metrics()` for recording
+multiple metrics in a single batch. Both functions write metrics to Cloud
+Logging, enabling subsequent visualization and analysis.
 
-from google_cloud_mldiagnostics import metric_types
+For example, to record a single metric:
+
+```python
+metrics.record(metric_types.MetricType.LOSS, 0.123, step=1)
+```
+
+To record multiple metrics efficiently, use `record_metrics`:
 
 ```python
 from google_cloud_mldiagnostics import metric_types
@@ -461,17 +469,19 @@ from google_cloud_mldiagnostics import metric_types
 
 for step in range(num_steps):
   if (step + 1) % 10 == 0:
-    # Model quality metrics
-    metrics.record(metric_types.MetricType.LEARNING_RATE, step_size, step=step+1)
-    metrics.record(metric_types.MetricType.LOSS, loss, step=step+1)
-    metrics.record(metric_types.MetricType.GRADIENT_NORM, gradient, step=step+1)
-    metrics.record(metric_types.MetricType.TOTAL_WEIGHTS, total_weights, step=step+1)
-    # Model performance metrics
-    metrics.record(metric_types.MetricType.STEP_TIME, step_time, step=step+1)
-    metrics.record(metric_types.MetricType.THROUGHPUT, throughput, step=step+1)
-    metrics.record(metric_types.MetricType.LATENCY, latency, step=step+1)
-    metrics.record(metric_types.MetricType.TFLOPS, tflops, step=step+1)
-    metrics.record(metric_types.MetricType.MFU, mfu, step=step+1)
+    metrics.record_metrics([
+        # Model quality metrics
+        {"metric_name": metric_types.MetricType.LEARNING_RATE, "value": step_size},
+        {"metric_name": metric_types.MetricType.LOSS, "value": loss},
+        {"metric_name": metric_types.MetricType.GRADIENT_NORM, "value": gradient},
+        {"metric_name": metric_types.MetricType.TOTAL_WEIGHTS, "value": total_weights},
+        # Model performance metrics
+        {"metric_name": metric_types.MetricType.STEP_TIME, "value": step_time},
+        {"metric_name": metric_types.MetricType.THROUGHPUT, "value": throughput},
+        {"metric_name": metric_types.MetricType.LATENCY, "value": latency},
+        {"metric_name": metric_types.MetricType.TFLOPS, "value": tflops},
+        {"metric_name": metric_types.MetricType.MFU, "value": mfu},
+    ], step=step+1)
 ```
 
 There are some metrics that are automatically collected by SDK from libTPU,
