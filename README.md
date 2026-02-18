@@ -226,8 +226,9 @@ on-demand capture drop down can auto populate these nodes automatically.
 
 | JAX Version | `mldiagnostics-connection-operator` Helm Chart Version |
 | :--- | :--- |
+| 0.8.1 | 0.14.0 |
 | 0.8.2 | 0.14.0 |
-| 0.8.1 / 0.8.3 | 0.15.0 |
+| 0.8.3 | 0.15.0 |
 
 ```bash
 helm install mldiagnostics-connection-operator \
