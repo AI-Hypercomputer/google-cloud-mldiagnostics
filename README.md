@@ -222,10 +222,18 @@ operator along with injection webhook into the GKE cluster. This will ensure
 that your machine learning run knows which GKE nodes it is running on and so
 on-demand capture drop down can auto populate these nodes automatically.
 
+##### Compatibility Matrix
+
+| JAX Version | `mldiagnostics-connection-operator` Helm Chart Version |
+| :--- | :--- |
+| 0.8.2 | 0.14.0 |
+| 0.8.1 / 0.8.3 | 0.15.0 |
+
 ```bash
 helm install mldiagnostics-connection-operator \
    --namespace=gke-mldiagnostics \
    --create-namespace \
+   --version <version> \
 oci://us-docker.pkg.dev/ai-on-gke/mldiagnostics-webhook-and-operator-helm/mldiagnostics-connection-operator
 
 ## use this to uninstall
