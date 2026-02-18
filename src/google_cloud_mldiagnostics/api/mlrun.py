@@ -50,10 +50,6 @@ def normalize_gcs_path(gcs_path):
 
   return prefix + path_part
 
-# List of supported regions for MLRun - New supported regions can be added here
-# to expand the region list as required in future.
-SUPPORTED_REGIONS = ["us-central1"]
-
 
 # Main SDK function - this is the primary interface users will import
 def machinelearning_run(
@@ -116,11 +112,6 @@ def machinelearning_run(
   if environment not in ["autopush", "staging", "prod"]:
     raise exceptions.MLRunConfigurationError(
         "environment must be one of 'autopush', 'staging', or 'prod'."
-    )
-
-  if region not in SUPPORTED_REGIONS:
-    raise exceptions.MLRunConfigurationError(
-        f"region must be one of {SUPPORTED_REGIONS} for now."
     )
 
   gcs_path = normalize_gcs_path(gcs_path)
