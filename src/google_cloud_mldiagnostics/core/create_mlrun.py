@@ -52,7 +52,7 @@ def initialize_mlrun(
       name: The name of the run.
       environment: The environment to use for the control plane client
         (autopush, staging, prod).
-      on_demand_xprof: Whether to start an on-demand xprof profiling server. 
+      on_demand_xprof: Whether to start an on-demand xprof profiling server.
         If enabled, the port is set to 9999.
       run_group: The run set this run belongs to.
       configs: Dictionary of configuration parameters.
@@ -102,8 +102,6 @@ def initialize_mlrun(
           " configuration, please see"
           " https://github.com/AI-Hypercomputer/google-cloud-mldiagnostics?tab=readme-ov-file#configure-gke-cluster."
       )
-    if workload_details.get("creation-timestamp"):
-      display_name = name + "-" + workload_details["creation-timestamp"]
     name = host_utils.get_identifier(workload_details)
 
   # sanitize the name and use it as the MLRun name for the control plane.
