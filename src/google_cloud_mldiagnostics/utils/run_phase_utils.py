@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 
 class RunPhaseMonitor:
   """Encapsulates monitoring state and logic."""
-  _cleanup_handlers: list[Callable[[], None]] = [xprof.stop_on_demand_xprof]
+  _cleanup_handlers: list[Callable[[], None]] = []
   _cleanup_handlers_lock = threading.Lock()
 
   @classmethod
