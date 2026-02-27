@@ -42,14 +42,26 @@ def get_host_memory_utilization() -> float | None:
 
 def get_tpu_duty_cycle() -> Optional[List[float]]:
   """Returns the TPU duty cycle from libtpu sdk."""
-  return libtpu_metric.get_tpu_duty_cycle()
+  try:
+    return libtpu_metric.get_tpu_duty_cycle()
+  except Exception as e:  # pylint: disable=broad-except
+    logger.warning("Failed to get TPU duty cycle: %s", e)
+    return None
 
 
 def get_tpu_tensorcore_utilization() -> Optional[List[float]]:
   """Returns the TPU tensorcore utilization from libtpu sdk."""
-  return libtpu_metric.get_tpu_tensorcore_utilization()
+  try:
+    return libtpu_metric.get_tpu_tensorcore_utilization()
+  except Exception as e:  # pylint: disable=broad-except
+    logger.warning("Failed to get TPU tensorcore utilization: %s", e)
+    return None
 
 
 def get_hbm_utilization() -> Optional[List[float]]:
   """Returns the HBM utilization from libtpu sdk."""
-  return libtpu_metric.get_hbm_utilization()
+  try:
+    return libtpu_metric.get_hbm_utilization()
+  except Exception as e:  # pylint: disable=broad-except
+    logger.warning("Failed to get HBM utilization: %s", e)
+    return None
