@@ -103,6 +103,8 @@ def initialize_mlrun(
           " https://github.com/AI-Hypercomputer/google-cloud-mldiagnostics?tab=readme-ov-file#configure-gke-cluster."
       )
     name = host_utils.get_identifier(workload_details)
+  else:
+    name = name + "-" + str(datetime.datetime.now().strftime("%Y%m%d%H%M%S"))
 
   # sanitize the name and use it as the MLRun name for the control plane.
   sanitized_name = host_utils.sanitize_identifier(name)

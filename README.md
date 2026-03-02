@@ -103,6 +103,11 @@ For read-only access (viewing UI only, not creating MLRuns),
 
 **GKE**: If your workload runs on GKE, we recommend using [Workload Identity](https://cloud.google.com/kubernetes-engine/docs/how-to/workload-identity) to associate a Kubernetes Service Account with a Google Service Account that has been granted the roles above.
 
+Additionally, ML Diagnostic platform uses a project level service account to read and write profile data from XProf backend. We want to grant this SA access on the target bucket.
+
+1. Grant `Storage Admin` role to service-`<project_number>`@gcp-sa-hypercomputecluster.iam.gserviceaccount.com on your bucket.
+
+
 ### Google Storage Bucket
 
 A Google Cloud Storage bucket to store profile data.
