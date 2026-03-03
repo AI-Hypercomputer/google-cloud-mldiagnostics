@@ -48,9 +48,7 @@ class ControlPlaneClient:
     if environment == "prod":
       base_url = "https://hypercomputecluster.googleapis.com/v1alpha"
     else:
-      base_url = (
-          f"https://{environment}-hypercomputecluster.sandbox.googleapis.com/v1alpha"
-      )
+      base_url = f"https://{environment}-hypercomputecluster.sandbox.googleapis.com/v1alpha"
     self.project_id = project_id
     self.location = location
     self.base_url = base_url
@@ -280,7 +278,7 @@ class ControlPlaneClient:
       target = metadata.get("target")
       if not target:
         raise ValueError(
-            f"Could not find target in operation metadata for operation"
+            "Could not find target in operation metadata for operation"
             f" {operation.get('name')}"
         )
       mlrun_name = target.split("/")[-1]
@@ -308,11 +306,14 @@ class ControlPlaneClient:
     try:
       response.raise_for_status()
     except requests.exceptions.HTTPError:
-      logger.exception(
-          "Get ML Run request failed: status_code=%s, content=%s",
-          response.status_code,
-          response.text,
-      )
+      if response.status_code == 404:
+        logger.warning("ML run '%s' not found.", name)
+      else:
+        logger.exception(
+            "Get ML Run request failed: status_code=%s, content=%s",
+            response.status_code,
+            response.text,
+        )
       raise
     json_response = response.json()
     logger.debug("Get ML Run response: %s", pprint.pformat(json_response))
