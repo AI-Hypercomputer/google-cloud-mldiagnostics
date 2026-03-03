@@ -118,7 +118,7 @@ If GKE will be used for the ML workload, user needs to install the following to
 their GKE cluster. Please ensure the GKE cluster is configured as a regional
 cluster with Workload Identity enabled.
 
-#### GKE: Install injection-webhook in the cluster
+#### Install injection-webhook in the cluster
 
 For workloads running in GKE, injection-webhook is needed to provide SDK needed
 metadata. It supports these common ML kubernetes workloads:
@@ -168,29 +168,43 @@ kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/
 kubectl delete -f https://github.com/cert-manager/cert-manager/releases/download/v1.13.0/cert-manager.yaml -n cert-manager
 ```
 
-#### Install injection-webhook
+##### Install or upgrade
+
+We recommend using `helm upgrade --install` to both install for the first time or upgrade an existing installation.
 
 ```bash
-helm install mldiagnostics-injection-webhook --namespace=gke-mldiagnostics --create-namespace oci://us-docker.pkg.dev/ai-on-gke/mldiagnostics-webhook-and-operator-helm/mldiagnostics-injection-webhook
-## Uninstall. First, uninstall MutatingWebhookConfiguration, then uninstall helm charts.
-# kubectl delete MutatingWebhookConfiguration mldiagnostics-injection-webhook-mutating-webhook-config
-# helm uninstall mldiagnostics-injection-webhook -n gke-mldiagnostics
+helm upgrade --install mldiagnostics-injection-webhook \
+  --namespace=gke-mldiagnostics \
+  --create-namespace \
+  oci://us-docker.pkg.dev/ai-on-gke/mldiagnostics-webhook-and-operator-helm/mldiagnostics-injection-webhook
 ```
 
 The above command can be edited with `-f` or `--set` flags to pass in a custom
 values file or key-value pair respectively for the chart.
 
-Or you can use gcloud and kubectl
+##### Uninstall
+
+Since google-cloud-mldiagnostics SDK depends on the METADATA injected by the
+mldiagnostics-injection-webhook, make sure your workloads are not using
+google-cloud-mldiagnostics SDK before uninstall it.
+
+To completely remove the injection webhook, follow these steps:
 
 ```bash
-gcloud artifacts generic download --repository=mldiagnostics-webhook-and-operator-yaml --location=us --package=mldiagnostics-injection-webhook --version=v0.5.0 --destination=./ --project=ai-on-gke
+helm uninstall mldiagnostics-injection-webhook -n gke-mldiagnostics
+```
+
+Or you can use gcloud and kubectl:
+
+```bash
+gcloud artifacts generic download --repository=mldiagnostics-webhook-and-operator-yaml --location=us --package=mldiagnostics-injection-webhook --version=v0.16.0 --destination=./ --project=ai-on-gke
 kubectl create namespace gke-mldiagnostics
-# it needs to be installed inside namespace gke-mldiagnostics. If not, need to change mldiagnostics-injection-webhook-v0.5.0.yaml
-kubectl apply -f mldiagnostics-injection-webhook-v0.5.0.yaml -n gke-mldiagnostics
+# it needs to be installed inside namespace gke-mldiagnostics. If not, need to change mldiagnostics-injection-webhook-v0.16.0.yaml
+kubectl apply -f mldiagnostics-injection-webhook-v0.16.0.yaml -n gke-mldiagnostics
 
 ## Uninstall. First, uninstall MutatingWebhookConfiguration, then delete yaml.
 # kubectl delete MutatingWebhookConfiguration mldiagnostics-injection-webhook-mutating-webhook-config
-# kubectl delete -f  mldiagnostics-injection-webhook-v0.5.0.yaml -n gke-mldiagnostics
+# kubectl delete -f  mldiagnostics-injection-webhook-v0.16.0.yaml -n gke-mldiagnostics
 ```
 
 #### Label workload
@@ -220,12 +234,16 @@ options:
         managed-mldiagnostics-gke: "true"
     ```
 
-#### GKE: Install connection-operator in the cluster
+#### Install connection-operator in the cluster
 
-For seamless on-demand profiling on GKE, we recommend deploying GKE connection
-operator along with injection webhook into the GKE cluster. This will ensure
-that your machine learning run knows which GKE nodes it is running on and so
-on-demand capture drop down can auto populate these nodes automatically.
+##### Install or upgrade
+
+For seamless on-demand profiling on GKE, we recommend deploying the GKE connection
+operator along with the injection webhook into the GKE cluster. This will ensure
+that your machine learning run knows which GKE nodes it is running on and so the
+on-demand capture drop-down can auto-populate these nodes automatically.
+
+We recommend using `helm upgrade --install` to both install for the first time or upgrade an existing installation.
 
 ##### Compatibility Matrix
 
@@ -234,30 +252,35 @@ on-demand capture drop down can auto populate these nodes automatically.
 | 0.8.1 | 0.14.0 |
 | 0.8.2 | 0.14.0 |
 | 0.8.3 | 0.14.0 |
-| 0.9.0 | 0.15.0 |
+| 0.9.0 | 0.16.0 |
 
 ```bash
-helm install mldiagnostics-connection-operator \
-   --namespace=gke-mldiagnostics \
-   --create-namespace \
-   --version <version> \
-oci://us-docker.pkg.dev/ai-on-gke/mldiagnostics-webhook-and-operator-helm/mldiagnostics-connection-operator
-
-## use this to uninstall
-# helm uninstall mldiagnostics-connection-operator -n gke-mldiagnostics
+# Replace <version> with the desired version from the compatibility matrix
+helm upgrade --install mldiagnostics-connection-operator \
+  --namespace=gke-mldiagnostics \
+  --create-namespace \
+  --version <version> \
+  oci://us-docker.pkg.dev/ai-on-gke/mldiagnostics-webhook-and-operator-helm/mldiagnostics-connection-operator
 ```
 
 The above command can be edited with `-f` or `--set` flags to pass in a custom
-values file or key-value pair respectively for the chart. Or you can use gcloud
-and kubectl
+values file or key-value pair respectively for the chart.
+
+##### Uninstall
 
 ```bash
-gcloud artifacts generic download --repository=mldiagnostics-webhook-and-operator-yaml --location=us --package=mldiagnostics-connection-operator --version=v0.5.0 --destination=./ --project=ai-on-gke
+helm uninstall mldiagnostics-connection-operator -n gke-mldiagnostics
+```
+
+Or you can use gcloud and kubectl:
+
+```bash
+gcloud artifacts generic download --repository=mldiagnostics-webhook-and-operator-yaml --location=us --package=mldiagnostics-connection-operator --version=v0.16.0 --destination=./ --project=ai-on-gke
 kubectl create namespace gke-mldiagnostics
-kubectl apply -f mldiagnostics-connection-operator-v0.5.0.yaml -n gke-mldiagnostics
+kubectl apply -f mldiagnostics-connection-operator-v0.16.0.yaml -n gke-mldiagnostics
 
 ## use this to uninstall
-# kubectl delete -f mldiagnostics-connection-operator-v0.5.0.yaml -n gke-mldiagnostics
+# kubectl delete -f mldiagnostics-connection-operator-v0.16.0.yaml -n gke-mldiagnostics
 ```
 
 ### Install SDK
