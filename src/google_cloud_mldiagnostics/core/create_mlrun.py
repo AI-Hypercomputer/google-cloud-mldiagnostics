@@ -129,10 +129,14 @@ def initialize_mlrun(
   manager = global_manager.get_global_run_manager()
   manager.initialize(ml_run)
 
-  diagon_url = create_diagnostics_url(region, project, sanitized_name)
-  xprof_url = create_xprof_url(diagon_url)
+  ml_diagnostics_url = create_diagnostics_url(region, project, sanitized_name)
+  xprof_url = create_xprof_url(ml_diagnostics_url)
   logging.info("MLRun '%s' created successfully.", ml_run.display_name)
-  logging.info("Diagon URL: %s : %s", ml_run.display_name, diagon_url)
+  logging.info(
+      "ML Diagnostics URL: %s : %s",
+      ml_run.display_name,
+      ml_diagnostics_url,
+  )
   logging.info(
       "Xprof URL: %s : %s",
       ml_run.display_name,
@@ -226,5 +230,5 @@ def create_diagnostics_url(region: str, project: str, name: str) -> str:
   return f"https://console.cloud.google.com/cluster-director/diagnostics/details/{region}/{name}?project={project}"
 
 
-def create_xprof_url(diagon_url: str) -> str:
-  return diagon_url + "&pageState=(%22nav%22:(%22section%22:%22profiles%22))"
+def create_xprof_url(ml_diagnostics_url: str) -> str:
+  return ml_diagnostics_url + "&pageState=(%22nav%22:(%22section%22:%22profiles%22))"
