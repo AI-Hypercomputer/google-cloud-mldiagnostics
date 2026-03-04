@@ -93,15 +93,21 @@ def _get_gke_workload_details() -> dict[str, Any] | None:
   return details
 
 
-def _gke_run_identifier(workload_details: dict[str, Any]) -> str:
+def _gke_run_identifier(name: str, workload_details: dict[str, Any]) -> str:
   """Returns the unique identifier for the gke workload.
 
   Args:
+    name: The name of the MLRun.
     workload_details: A dictionary containing workload details.
 
   Example output:
   cluster-test_namespace-test_kind-test_workloadid-test_20240520-110840
   """
+
+  if not name:
+    raise ValueError(
+        "Could not generate ML Run identifier due to missing MLRun name."
+    )
 
   if not workload_details:
     raise ValueError(
@@ -156,7 +162,8 @@ def _gke_run_identifier(workload_details: dict[str, Any]) -> str:
   )
 
   identifier = (
-      f"{cluster}"
+      f"{name}"
+      f"-{cluster}"
       f"-{workload_details['namespace']}"
       f"-{workload_details['kind']}-{workload_details['id']}"
       f"-{transformed_timestamp}"
@@ -187,11 +194,11 @@ def get_workload_details() -> dict[str, Any] | None:
   return _get_gke_workload_details()
 
 
-def get_identifier(workload_details: dict[str, Any]) -> str:
+def get_identifier(name: str, workload_details: dict[str, Any]) -> str:
   """Returns the GCS path for the workload."""
   # TODO: [INTERNAL] - Add support for non-GKE workloads.
 
-  return _gke_run_identifier(workload_details)
+  return _gke_run_identifier(name, workload_details)
 
 
 def sanitize_identifier(identifier: str) -> str:

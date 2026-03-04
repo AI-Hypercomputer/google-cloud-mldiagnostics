@@ -102,7 +102,7 @@ def initialize_mlrun(
           " configuration, please see"
           " https://github.com/AI-Hypercomputer/google-cloud-mldiagnostics?tab=readme-ov-file#configure-gke-cluster."
       )
-    name = host_utils.get_identifier(workload_details)
+    name = host_utils.get_identifier(name, workload_details)
   else:
     name = name + "-" + str(datetime.datetime.now().strftime("%Y%m%d%H%M%S"))
 
