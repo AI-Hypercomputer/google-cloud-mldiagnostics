@@ -343,7 +343,6 @@ class MetricsRecorderThread:
     """Continuously collects and records metrics until stop event is set."""
     while not self._stop_event.is_set():
       self._collect_and_record()
-      self._update_avg_metrics()
       # Wait for the specified interval, or until the stop event is set.
       self._stop_event.wait(self._interval_seconds)
 
@@ -362,53 +361,6 @@ class MetricsRecorderThread:
         logger.error(
             "Failed to collect or record metric '%s': %s", metric_name, e
         )
-
-  def _update_avg_metrics(self):
-    """Updates the averaged metrics in control plane."""
-    ml_run, control_plane_client_instance = self._get_active_run_and_client()
-    if self._is_master_host:
-      if control_plane_client_instance is None:
-        raise exceptions.NoActiveRunError(
-            "Control plane client is None on the master host."
-        )
-      metrics_tracker = metrics_recorder.get_metric_tracker()
-      metrics_avg = {}
-      if metric_types.MetricType.STEP_TIME.value in metrics_tracker:
-        step_time_avg = metrics_tracker[
-            metric_types.MetricType.STEP_TIME.value
-        ]["avg"]
-        metrics_avg["avgStep"] = str(round(step_time_avg, 9)) + "s"
-      if metric_types.MetricType.MFU.value in metrics_tracker:
-        metrics_avg["avgMfu"] = metrics_tracker[
-            metric_types.MetricType.MFU.value
-        ]["avg"]
-      if metric_types.MetricType.THROUGHPUT.value in metrics_tracker:
-        metrics_avg["avgThroughput"] = metrics_tracker[
-            metric_types.MetricType.THROUGHPUT.value
-        ]["avg"]
-      if metric_types.MetricType.LATENCY.value in metrics_tracker:
-        latency_avg = metrics_tracker[metric_types.MetricType.LATENCY.value][
-            "avg"
-        ]
-        metrics_avg["avgLatency"] = str(round(latency_avg, 9)) + "s"
-      if metric_types.MetricType.HBM_UTILIZATION.value in metrics_tracker:
-        metrics_avg["avgHbmUtilization"] = metrics_tracker[
-            metric_types.MetricType.HBM_UTILIZATION.value
-        ]["avg"]
-      if (
-          metric_types.MetricType.TPU_TENSORCORE_UTILIZATION.value
-          in metrics_tracker
-      ):
-        metrics_avg["avgTpuTensorcoreUtilization"] = metrics_tracker[
-            metric_types.MetricType.TPU_TENSORCORE_UTILIZATION.value
-        ]["avg"]
-
-      if metrics_avg:
-        control_plane_client_instance.update_ml_run(
-            name=ml_run.name,
-            metrics=metrics_avg,
-        )
-
 
 # Global metrics recorder instance
 metrics_recorder = _MetricsRecorder()

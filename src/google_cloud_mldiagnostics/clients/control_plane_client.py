@@ -160,7 +160,6 @@ class ControlPlaneClient:
       run_phase: str,
       configs: Optional[Dict[str, Any]] = None,
       tools: Optional[List[Dict[str, Any]]] = None,
-      metrics: Optional[Dict[str, str]] = None,
       artifacts: Optional[Dict[str, str]] = None,
       run_group: Optional[str] = None,
       labels: Optional[Dict[str, str]] = None,
@@ -173,10 +172,9 @@ class ControlPlaneClient:
         name: Name of the run
         display_name: Display name for the run
         run_phase: Phase of the run (ACTIVE, COMPLETE, FAILED)
-        configs: Configuration settings (userConfigs, softwareConfigs,
+        configs: Configuration settings (softwareConfigs,
           hardwareConfigs)
         tools: List of tools to enable (e.g., XProf, NSys)
-        metrics: Metrics for the run (e.g., avgStep, avgLatency)
         artifacts: Artifacts configuration (e.g., gcsPath)
         run_group: Run group grouping identifier
         labels: Custom labels for the run
@@ -193,9 +191,6 @@ class ControlPlaneClient:
 
     if configs:
       payload["configs"] = configs
-
-    if metrics:
-      payload["metrics"] = metrics
 
     if artifacts:
       payload["artifacts"] = artifacts
@@ -323,14 +318,12 @@ class ControlPlaneClient:
       self,
       name: str,
       run_phase: Optional[str] = None,
-      metrics: Optional[Dict[str, str]] = None,
   ) -> Dict[str, Any]:
     """Update an existing ML run using the Google Cloud API by sending the full resource.
 
     Args:
         name: Name of the run to update
         run_phase: Phase of the run (ACTIVE, COMPLETE, FAILED)
-        metrics: Metrics for the run (e.g., avgStep, avgLatency)
 
     Returns:
         Response from the API as a dictionary
@@ -340,10 +333,6 @@ class ControlPlaneClient:
     """
     payload = self.get_ml_run(name)
     need_update = False
-
-    if metrics is not None and payload.get("metrics") != metrics:
-      payload["metrics"] = metrics
-      need_update = True
 
     if run_phase is not None and payload.get("runPhase") != run_phase:
       payload["runPhase"] = run_phase

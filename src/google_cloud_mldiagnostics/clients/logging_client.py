@@ -14,6 +14,7 @@
 
 """Client for writing metrics directly to Google Cloud Logging."""
 
+from collections.abc import Mapping, Sequence
 import datetime
 import logging
 import os
@@ -74,18 +75,18 @@ class LoggingClient:
   def write_metric(
       self,
       metric_name: str,
-      value: float | int | list[float | int],
+      value: float | int | Sequence[float | int] | Mapping[str, Any],
       run_id: str,
       location: str,
       step: Optional[int] = None,
-      labels: Optional[dict[str, str]] = None,
+      labels: Optional[Mapping[str, str]] = None,
   ):
     """Write a single metric point to Cloud Logging.
 
     Args:
         metric_name: Name of the metric
-        value: Metric value. Can be a single int or float, or a list of ints
-            and floats.
+        value: Metric value. Can be a single int or float, a list of ints
+            and floats, or a dictionary.
         run_id: ML run identifier
         location: ML run region
         step: Optional step number
@@ -107,7 +108,7 @@ class LoggingClient:
 
   def write_metrics(
       self,
-      metrics: list[dict[str, Any]],
+      metrics: Sequence[Mapping[str, Any]],
       run_id: str,
       location: str,
   ):
@@ -141,10 +142,12 @@ class LoggingClient:
               },
           )
 
-          if isinstance(value, (int, float)):
-            payload_values = [value]
+          if isinstance(value, dict):
+            payload = value.copy()
+          elif isinstance(value, (int, float)):
+            payload = {"values": [value]}
           elif isinstance(value, list):
-            payload_values = value
+            payload = {"values": value}
           else:
             logger.warning(
                 "Skipping metric %s due to unsupported value type: %s",
@@ -152,17 +155,17 @@ class LoggingClient:
                 type(value),
             )
             continue
-          payload = {"values": payload_values}
 
           if (
-              labels
+              isinstance(value, (int, float, list))
+              and labels
               and {"hostname", "accelerator_type"}.issubset(labels)
           ):
             hostname = labels["hostname"]
             accelerator_type = labels["accelerator_type"]
             payload["accelerator_labels"] = [
                 f"{hostname}-{accelerator_type}{i}"
-                for i, _ in enumerate(payload_values)
+                for i, _ in enumerate(payload["values"])
             ]
 
           if step is not None:
@@ -193,18 +196,18 @@ class NoOpLoggingClient(LoggingClient):
   def write_metric(
       self,
       metric_name: str,
-      value: float | int | list[float | int],
+      value: float | int | Sequence[float | int] | Mapping[str, Any],
       run_id: str,
       location: str,
       step: Optional[int] = None,
-      labels: Optional[dict[str, str]] = None,
+      labels: Optional[Mapping[str, str]] = None,
   ):
     """This is a no-op and does not write any metrics."""
     pass
 
   def write_metrics(
       self,
-      metrics: list[dict[str, Any]],
+      metrics: Sequence[Mapping[str, Any]],
       run_id: str,
       location: str,
   ):

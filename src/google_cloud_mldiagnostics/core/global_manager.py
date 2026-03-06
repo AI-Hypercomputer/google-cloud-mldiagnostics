@@ -69,108 +69,130 @@ class GlobalRunManager:
           project_id=mlrun.project
       )
 
-      # Initialize ControlPlaneClient with project and location from MLRun
-      # Only initialize on master host to avoid duplicate MLRun creation.
-      if host_utils.is_master_host():
-        self._control_plane_client = control_plane_client.ControlPlaneClient(
-            project_id=mlrun.project,
-            location=mlrun.location,
-            environment=mlrun.environment,
-        )
-        try:
-          logger.info("Checking for existing ML run with name: %s", mlrun.name)
-          response = self._control_plane_client.get_ml_run(mlrun.name)
-          logger.info(
-              "Found existing ML run: %s.",
-              response.get("name", "unknown"),
-          )
-          if response.get("runPhase") == mlrun_types.RunPhase.PHASE_FAILED.value:
-            logger.info(
-                "Existing ML run '%s' is in FAILED state, updating to ACTIVE.",
-                mlrun.name,
-            )
-            self._control_plane_client.update_ml_run(
-                name=mlrun.name,
-                run_phase=mlrun_types.RunPhase.PHASE_ACTIVE.value,
-            )
-          else:
-            logger.info(
-                "ML run '%s' with status %s already exists, skipping"
-                " creation.",
-                mlrun.name,
-                response.get("runPhase"),
-            )
-        except requests.exceptions.HTTPError as e:
-          if e.response is not None and e.response.status_code == 404:
-            logger.info(
-                "ML run '%s' not found, creating a new one.", mlrun.name
-            )
-            # Prepare artifacts configuration if gcs_path is provided
-            artifacts = None
-            if mlrun.gcs_path:
-              artifacts = {"gcsPath": mlrun.gcs_path}
-
-            # Prepare default tools (XProf is commonly used)
-            tools = [{"xprof": {}}]
-            # Create the ML run with mapped parameters
-            try:
-              response = self._control_plane_client.create_ml_run(
-                  name=mlrun.name,
-                  display_name=mlrun.display_name,
-                  run_phase=str(mlrun.run_phase.value),
-                  run_group=mlrun.run_group,
-                  configs=mlrun.configs,
-                  tools=tools,
-                  artifacts=artifacts,
-                  labels={
-                      "created_by": "diagon_sdk",
-                      # Request provision xprof tool, can be removed when
-                      # Control Plane does this by default.
-                      "create-tool-mode": "regular",
-                      "diagon_sdk_version": (
-                          _version.get_version().replace(".", "-")
-                      ),
-                      "on_demand_xprof": (
-                          "enabled" if mlrun.on_demand_xprof else "disabled"
-                      ),
-                  },
-                  orchestrator=mlrun.orchestrator,
-                  workload_details=mlrun.workload_details,
-              )
-              logger.info(
-                  "Successfully created ML run: %s",
-                  response.get("name", "unknown"),
-              )
-
-            except requests.exceptions.HTTPError as e_create:
-              if (
-                  e_create.response is not None
-                  and e_create.response.status_code == 409
-              ):
-                logger.info(
-                    "ML run '%s' already exists, skipping creation.", mlrun.name
-                )
-              else:
-                logger.error("Failed to create ML run: %s", e_create)
-                raise
-            except Exception as e_create:
-              logger.error("Failed to create ML run: %s", e_create)
-              raise
-          else:
-            # HTTPError with status other than 404, or no response
-            logger.error("Failed to get ML run '%s': %s", mlrun.name, e)
-            raise
-        except Exception as e_get:
-          logger.error("Failed to get ML run '%s': %s", mlrun.name, e_get)
-          raise
-      else:
+      if not host_utils.is_master_host():
         logger.info(
-            "Skipping ML run creation on control plane (run_group=%s, name=%s):"
-            " Current host is not the master host.",
+            "Skipping ML run initialization on control plane (run_group=%s,"
+            " name=%s): Current host is not the master host.",
             mlrun.run_group,
             mlrun.name,
         )
+        self._initialized = True
+        return
 
+      # Write userConfigs to Cloud Logging if available.
+      if (
+          mlrun.configs
+          and isinstance(mlrun.configs, dict)
+          and "userConfigs" in mlrun.configs
+          and self._current_logging_client
+      ):
+        try:
+          self._current_logging_client.write_metric(
+              metric_name="mlrun_configs",
+              value={"userConfigs": mlrun.configs.get("userConfigs")},
+              run_id=mlrun.name,
+              location=mlrun.location,
+          )
+        except Exception:
+          logger.exception(
+              "Failed to write configs to Cloud Logging for run: %s",
+              mlrun.name,
+          )
+        del mlrun.configs["userConfigs"]
+
+      # Initialize ControlPlaneClient with project and location from MLRun
+      # Only initialize on master host to avoid duplicate MLRun creation.
+      self._control_plane_client = control_plane_client.ControlPlaneClient(
+          project_id=mlrun.project,
+          location=mlrun.location,
+          environment=mlrun.environment,
+      )
+      try:
+        logger.info("Checking for existing ML run with name: %s", mlrun.name)
+        response = self._control_plane_client.get_ml_run(mlrun.name)
+        logger.info(
+            "Found existing ML run: %s.",
+            response.get("name", "unknown"),
+        )
+        if response.get("runPhase") == mlrun_types.RunPhase.PHASE_FAILED.value:
+          logger.info(
+              "Existing ML run '%s' is in FAILED state, updating to ACTIVE.",
+              mlrun.name,
+          )
+          self._control_plane_client.update_ml_run(
+              name=mlrun.name,
+              run_phase=mlrun_types.RunPhase.PHASE_ACTIVE.value,
+          )
+        else:
+          logger.info(
+              "ML run '%s' with status %s already exists, skipping"
+              " creation.",
+              mlrun.name,
+              response.get("runPhase"),
+          )
+      except requests.exceptions.HTTPError as e:
+        if e.response is not None and e.response.status_code == 404:
+          logger.info(
+              "ML run '%s' not found, creating a new one.", mlrun.name
+          )
+          # Prepare artifacts configuration if gcs_path is provided
+          artifacts = None
+          if mlrun.gcs_path:
+            artifacts = {"gcsPath": mlrun.gcs_path}
+
+          # Prepare default tools (XProf is commonly used)
+          tools = [{"xprof": {}}]
+          # Create the ML run with mapped parameters
+          try:
+            response = self._control_plane_client.create_ml_run(
+                name=mlrun.name,
+                display_name=mlrun.display_name,
+                run_phase=str(mlrun.run_phase.value),
+                run_group=mlrun.run_group,
+                configs=mlrun.configs,
+                tools=tools,
+                artifacts=artifacts,
+                labels={
+                    "created_by": "diagon_sdk",
+                    # Request provision xprof tool, can be removed when
+                    # Control Plane does this by default.
+                    "create-tool-mode": "regular",
+                    "diagon_sdk_version": (
+                        _version.get_version().replace(".", "-")
+                    ),
+                    "on_demand_xprof": (
+                        "enabled" if mlrun.on_demand_xprof else "disabled"
+                    ),
+                },
+                orchestrator=mlrun.orchestrator,
+                workload_details=mlrun.workload_details,
+            )
+            logger.info(
+                "Successfully created ML run: %s",
+                response.get("name", "unknown"),
+            )
+
+          except requests.exceptions.HTTPError as e_create:
+            if (
+                e_create.response is not None
+                and e_create.response.status_code == 409
+            ):
+              logger.info(
+                  "ML run '%s' already exists, skipping creation.", mlrun.name
+              )
+            else:
+              logger.error("Failed to create ML run: %s", e_create)
+              raise
+          except Exception as e_create:
+            logger.error("Failed to create ML run: %s", e_create)
+            raise
+        else:
+          # HTTPError with status other than 404, or no response
+          logger.error("Failed to get ML run '%s': %s", mlrun.name, e)
+          raise
+      except Exception as e_get:
+        logger.error("Failed to get ML run '%s': %s", mlrun.name, e_get)
+        raise
       self._initialized = True
 
   def has_active_run(self) -> bool:
