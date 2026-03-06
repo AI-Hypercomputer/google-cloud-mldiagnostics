@@ -143,6 +143,14 @@ def initialize_mlrun(
       xprof_url,
   )
 
+  if orchestrator == "GKE":
+    gke_url = create_gke_url(region, project, sanitized_name)
+    logging.info(
+        "GKE detail view URL: %s : %s",
+        ml_run.display_name,
+        gke_url,
+    )
+
   run_phase_monitor = run_phase_utils.RunPhaseMonitor()
   run_phase_monitor.start()
 
@@ -224,6 +232,13 @@ def initialize_mlrun(
     xprof.start_on_demand_xprof(port=xprof_port)
 
   return ml_run
+
+
+def create_gke_url(
+    region: str, project: str, name: str
+) -> str:
+  """Creates GKE detail view URL."""
+  return f"https://console.cloud.google.com/kubernetes/aiml/run/{region}/{name}?project={project}"
 
 
 def create_diagnostics_url(region: str, project: str, name: str) -> str:
