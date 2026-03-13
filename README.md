@@ -83,34 +83,37 @@ start and stop of XProf. Users can trigger XProf programmatically from their
 workload code as well as on demand from the UI. Each XProf session will be
 attached to the MLRun.
 
-## Setup
+## Prerequisites
 
-### Enable API
+Before using ML Diagnostics, enable the Cluster Director API and add the required IAM permissions.
 
-Enable Cluster Director API https://docs.cloud.google.com/endpoints/docs/openapi/enable-api
+### Enable Cluster Director API
+
+**Note:** The Cluster Director API is not related to [TPU Cluster Director](https://clouddocs.devsite.corp.google.com/tpu/docs/all-capacity-overview).
+
+Google Cloud ML Diagnostics relies on the [Cluster Director API](https://cloud.google.com/products/cluster-director) for accessing gcloud commands, for collecting metrics/configs/profiles in the platform and for accessing the UI.
+
+**Note:** You do not need to use the Cluster Director for deploying and managing your clusters in order to use the ML Diagnostics product. ML Diagnostics product works with clusters managed by GKE and Cluster Director or even clusters using custom orchestrators. ML Diagnostics is part of the Cluster Director family of APIs, but doesn't depend on users using the Cluster Director product itself.
+
+For more on enabling Cluster Director API, see [Enabling an API in your Google Cloud project](https://docs.cloud.google.com/endpoints/docs/openapi/enable-api).
 
 ### IAM Permissions
 
-The Google Service Account used by your workload requires the following IAM
-roles assigned on the project:
+The Google Service Account used by your workload requires the following IAM roles assigned on the project:
 
-1. `roles/clusterdirector.editor`: For full access to create and manage MLRun resources and view the UI.
+**If using ML Diagnostics SDK:**
+
+1. `roles/clusterdirector.editor`: For full access to create and manage MLRun resources and view the user interface.
 1. `roles/logging.logWriter`: To write logs and metrics to Google Cloud Logging.
 1. `roles/storage.objectUser`: To save profiles to the GCS bucket specified in `machinelearning_run`.
 
-For read-only access (viewing UI only, not creating MLRuns),
-`roles/clusterdirector.viewer` is sufficient.
+**If using ML Diagnostics gcloud CLI:**
 
-**GKE**: If your workload runs on GKE, we recommend using [Workload Identity](https://cloud.google.com/kubernetes-engine/docs/how-to/workload-identity) to associate a Kubernetes Service Account with a Google Service Account that has been granted the roles above.
+1. `roles/storage.objectUser`: To save profiles to the GCS bucket specified in `machinelearning_run`.
 
-Additionally, ML Diagnostic platform uses a project level service account to read and write profile data from XProf backend. We want to grant this SA access on the target bucket.
+For read-only access (viewing UI only, not creating MLRuns), `roles/clusterdirector.viewer` is sufficient.
 
-1. Grant `Storage Admin` role to service-`<project_number>`@gcp-sa-hypercomputecluster.iam.gserviceaccount.com on your bucket.
-
-
-### Google Storage Bucket
-
-A Google Cloud Storage bucket to store profile data.
+For workloads on Google Kubernetes Engine, use [Workload Identity](https://cloud.google.com/kubernetes-engine/docs/how-to/workload-identity) to associate a Kubernetes Service Account with a Google Service Account that has been granted the required roles.
 
 ### Configure GKE Cluster
 
