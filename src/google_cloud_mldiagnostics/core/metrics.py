@@ -343,6 +343,7 @@ class MetricsRecorderThread:
     """Continuously collects and records metrics until stop event is set."""
     while not self._stop_event.is_set():
       self._collect_and_record()
+      self._update_control_plane_time()
       # Wait for the specified interval, or until the stop event is set.
       self._stop_event.wait(self._interval_seconds)
 
@@ -361,6 +362,19 @@ class MetricsRecorderThread:
         logger.error(
             "Failed to collect or record metric '%s': %s", metric_name, e
         )
+
+  def _update_control_plane_time(self):
+    """Updates the time metric in control plane."""
+    ml_run, control_plane_client_instance = self._get_active_run_and_client()
+    if self._is_master_host:
+      if control_plane_client_instance is None:
+        raise exceptions.NoActiveRunError(
+            "Control plane client is None on the master host."
+        )
+      logger.info("Updating control plane time stamp.")
+      control_plane_client_instance.update_ml_run(
+          name=ml_run.name,
+      )
 
 # Global metrics recorder instance
 metrics_recorder = _MetricsRecorder()
