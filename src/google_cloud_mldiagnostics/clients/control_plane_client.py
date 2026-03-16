@@ -317,12 +317,14 @@ class ControlPlaneClient:
   def update_ml_run(
       self,
       name: str,
+      force: bool = False,
       run_phase: Optional[str] = None,
   ) -> Dict[str, Any]:
     """Update an existing ML run using the Google Cloud API by sending the full resource.
 
     Args:
         name: Name of the run to update
+        force: If True, forces an update even if no fields have changed.
         run_phase: Phase of the run (ACTIVE, COMPLETE, FAILED)
 
     Returns:
@@ -332,7 +334,7 @@ class ControlPlaneClient:
         requests.exceptions.RequestException: If the HTTP request fails
     """
     payload = self.get_ml_run(name)
-    need_update = False
+    need_update = force
 
     if run_phase is not None and payload.get("runPhase") != run_phase:
       payload["runPhase"] = run_phase

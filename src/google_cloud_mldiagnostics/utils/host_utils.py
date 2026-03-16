@@ -15,6 +15,7 @@
 """Utility functions for host- related checks."""
 
 import datetime
+import hashlib
 import json
 import logging
 import os
@@ -23,6 +24,7 @@ import socket
 from typing import Any
 
 from google_cloud_mldiagnostics.utils.jax_utils import jax_host
+
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +41,7 @@ def _get_gke_diagon_identifier() -> dict[str, Any] | None:
     diagon_identifier = json.loads(diagon_identifier_str)
     return diagon_identifier
   except json.JSONDecodeError:
-    logger.error(
+    logger.exception(
         "Failed to parse GKE_DIAGON_IDENTIFIER: %s", diagon_identifier_str
     )
     return None
@@ -56,7 +58,7 @@ def _get_gke_diagon_metadata() -> dict[str, Any] | None:
     diagon_metadata = json.loads(diagon_metadata_str)
     return diagon_metadata
   except json.JSONDecodeError:
-    logger.error(
+    logger.exception(
         "Failed to parse GKE_DIAGON_METADATA: %s", diagon_metadata_str
     )
     return None
@@ -91,6 +93,18 @@ def _get_gke_workload_details() -> dict[str, Any] | None:
     return None
 
   return details
+
+
+def _get_sha256_hash(input_string: str) -> str:
+  """Calculates the SHA-256 hash of a given string."""
+  encoded_string = input_string.encode("utf-8")
+  sha256_hash = hashlib.sha256()
+  sha256_hash.update(encoded_string)
+  hex_digest = sha256_hash.hexdigest()
+  logger.debug(
+      "Input string: %s ML Run ID (SHA-256 hash): %s", input_string, hex_digest
+  )
+  return hex_digest
 
 
 def _gke_run_identifier(name: str, workload_details: dict[str, Any]) -> str:
@@ -162,13 +176,17 @@ def _gke_run_identifier(name: str, workload_details: dict[str, Any]) -> str:
   )
 
   identifier = (
-      f"{name}"
-      f"-{cluster}"
-      f"-{workload_details['namespace']}"
-      f"-{workload_details['kind']}-{workload_details['id']}"
-      f"-{transformed_timestamp}"
+      (
+          f"{name}"
+          f"-{cluster}"
+          f"-{workload_details['namespace']}"
+          f"-{workload_details['kind']}-{workload_details['id']}"
+          f"-{transformed_timestamp}"
+      )
+      .replace("_", "-")
+      .lower()
   )
-  return identifier.replace("_", "-").lower()
+  return _get_sha256_hash(identifier)
 
 
 # Public functions

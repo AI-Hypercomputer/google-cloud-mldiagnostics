@@ -100,7 +100,7 @@ class _MetricsRecorder:
       record_on_all_hosts: bool = False,
   ) -> None:
     """Record a single metric value, averaging lists if provided.
-    
+
     Args:
         metric_name: Name of metric to record.
         value: Metric value.
@@ -365,8 +365,10 @@ class MetricsRecorderThread:
 
   def _update_control_plane_time(self):
     """Updates the time metric in control plane."""
-    ml_run, control_plane_client_instance = self._get_active_run_and_client()
+    # Only update control plane time from the master host. This avoids
+    # unnecessary client fetches and updates on worker hosts.
     if self._is_master_host:
+      ml_run, control_plane_client_instance = self._get_active_run_and_client()
       if control_plane_client_instance is None:
         raise exceptions.NoActiveRunError(
             "Control plane client is None on the master host."
@@ -374,6 +376,7 @@ class MetricsRecorderThread:
       logger.info("Updating control plane time stamp.")
       control_plane_client_instance.update_ml_run(
           name=ml_run.name,
+          force=True,
       )
 
 # Global metrics recorder instance

@@ -246,4 +246,4 @@ def create_diagnostics_url(region: str, project: str, name: str) -> str:
 
 
 def create_xprof_url(ml_diagnostics_url: str) -> str:
-  return ml_diagnostics_url + "&pageState=(%22nav%22:(%22section%22:%22profiles%22))"
+  return f"{ml_diagnostics_url}&pageState=(%22nav%22:(%22section%22:%22profiles%22))"
