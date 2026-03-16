@@ -542,6 +542,37 @@ keys that the user can write metrics values to these keys by themselves.
 These predefined metrics as well as other user-defined metrics can be recorded
 with x-axis as `time` or as `step`.
 
+User can record any custom metric in the workload as shown below:
+
+```python
+metrics.record("custom_metrics_1", step_size, step=step + 1)
+```
+
+This will capture a new custom_metrics_1 for workload and the user can view it in the Model Metrics tab for this specific machine learning run.
+
+To record multiple metrics in one call, user can use record_metrics method as shown below:
+
+```python
+metrics.record_metrics([
+        # Model quality metrics
+        {"metric_name": metric_types.MetricType.LEARNING_RATE, "value": step_size},
+        {"metric_name": metric_types.MetricType.LOSS, "value": loss},
+        {"metric_name": metric_types.MetricType.GRADIENT_NORM, "value": gradient},
+        {"metric_name": metric_types.MetricType.TOTAL_WEIGHTS, "value": total_weights},
+        # Model performance metrics
+        {"metric_name": metric_types.MetricType.STEP_TIME, "value": step_time},
+        {"metric_name": metric_types.MetricType.THROUGHPUT, "value": throughput},
+        {"metric_name": metric_types.MetricType.LATENCY, "value": latency},
+        {"metric_name": metric_types.MetricType.TFLOPS, "value": tflops},
+        {"metric_name": metric_types.MetricType.MFU, "value": mfu},
+        # Custom metrics
+        {"custom_metrics_1", "value":<value>},
+        {"custom_metrics_2", "value":<value>},
+        {"avg_mtp_acceptance_rate_percent", "value":<value>},
+        {"dpo_reward_accuracy", "value":<value>},
+    ], step=step+1)
+```
+
 ### Programmatic Profile Capture
 
 In order to capture XProf profiles of your ML workload, you have two options:
@@ -566,7 +597,7 @@ XLA, Tensorflow) for profile collection so you can use the same profile capture
 code across all frameworks. All the profile sessions will be captured in the GCS
 bucket defined in the machine learning run.
 
-**Note** For preview, only JAX is supported.
+**Note:** Google Cloud ML Diagnostics primarily supports JAX on Google Cloud TPUs (support for other frameworks like vllm, sglang, Torch TPU, etc will come in the future).
 
 ```python
 # Support collection via APIs
