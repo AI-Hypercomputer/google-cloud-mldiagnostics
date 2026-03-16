@@ -31,6 +31,7 @@
   - [Programmatic Profile Capture](#programmatic-profile-capture)
   - [Multi-host (process) profiling](#multi-host-process-profiling)
   - [Enable On-Demand Profile Capture](#enable-on-demand-profile-capture)
+  - [Using ML Diagnostics with Maxtext](#using-ml-diagnostics-with-maxtext)
 
 ## Overview
 
@@ -739,6 +740,30 @@ WORKDIR /app
 # Run your script
 CMD ["python", "your_train_script.py"]
 ```
+
+### Using ML Diagnostics with Maxtext
+
+For users who use Maxtext as their ML workload, ML Diagnostics SDK is already pre-integrated with Maxtext. You can enable ML Diagnostics with Maxtext with the `managed_mldiagnostics` flag. If this is enabled, it will:
+- Create a managed MachineLearning run with all the MaxText configs.
+- Upload profiling traces, if the profiling is enabled by `profiler="xplane"`.
+- Upload training metrics, at the defined `log_period` interval.
+
+These are the new flags related to this feature:
+
+```yaml
+managed_mldiagnostics: True  # Whether to enable the managed diagnostics
+managed_mldiagnostics_run_group: "<some-name>"  # Optional. Used to group multiple runs.
+```
+
+To enable ML Diagnostics in Maxtext, you can either change the configuration file of your run, or pass the flags from the command line. 
+
+When you run `MaxText.train`, you can pass these flags:
+
+```bash
+python3 -m MaxText.train src/MaxText/configs/base.yml run_name="demo-mldiagnostics-run-2" model_name="<your_chosen_model>" base_output_directory=gs://<your_gcs_folder>/  dataset_type=synthetic steps=100 log_period=10 profiler=xplane upload_all_profiler_results=True managed_mldiagnostics=True managed_mldiagnostics_run_group="demo-mldiagnostics-group"
+```
+
+`upload_all_profiler_results=True` captures multihost profiles from all hosts.
 
 ## Deploy Workload with SDK integrated
 
