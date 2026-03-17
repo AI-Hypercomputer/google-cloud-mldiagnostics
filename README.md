@@ -259,17 +259,25 @@ We recommend using `helm upgrade --install` to both install for the first time o
 
 | JAX Version | `mldiagnostics-connection-operator` Helm Chart Version |
 | :--- | :--- |
-| 0.8.1 | 0.14.0 |
-| 0.8.2 | 0.14.0 |
-| 0.8.3 | 0.14.0 |
-| 0.9.0 | 0.16.0 |
+| 0.8.x | 0.21.0 |
+| 0.9.x+ | 0.21.0 |
 
+###### For JAX 0.8.x:
 ```bash
-# Replace <version> with the desired version from the compatibility matrix
 helm upgrade --install mldiagnostics-connection-operator \
   --namespace=gke-mldiagnostics \
   --create-namespace \
-  --version <version> \
+  --version 0.21.0 \
+  oci://us-docker.pkg.dev/ai-on-gke/mldiagnostics-webhook-and-operator-helm/mldiagnostics-connection-operator \
+  --set 'mldiagnosticsConnectionOperator.controller.args={--metrics-bind-address=:8443,--leader-elect,--health-probe-bind-address=:8081,--sidecar-timeout=65m,--disable-hostname-override}'
+```
+
+###### For JAX 0.9.x+:
+```bash
+helm upgrade --install mldiagnostics-connection-operator \
+  --namespace=gke-mldiagnostics \
+  --create-namespace \
+  --version 0.21.0 \
   oci://us-docker.pkg.dev/ai-on-gke/mldiagnostics-webhook-and-operator-helm/mldiagnostics-connection-operator
 ```
 
@@ -285,12 +293,12 @@ helm uninstall mldiagnostics-connection-operator -n gke-mldiagnostics
 Or you can use gcloud and kubectl:
 
 ```bash
-gcloud artifacts generic download --repository=mldiagnostics-webhook-and-operator-yaml --location=us --package=mldiagnostics-connection-operator --version=v0.16.0 --destination=./ --project=ai-on-gke
+gcloud artifacts generic download --repository=mldiagnostics-webhook-and-operator-yaml --location=us --package=mldiagnostics-connection-operator --version=v0.21.0 --destination=./ --project=ai-on-gke
 kubectl create namespace gke-mldiagnostics
-kubectl apply -f mldiagnostics-connection-operator-v0.16.0.yaml -n gke-mldiagnostics
+kubectl apply -f mldiagnostics-connection-operator-v0.21.0.yaml -n gke-mldiagnostics
 
 ## use this to uninstall
-# kubectl delete -f mldiagnostics-connection-operator-v0.16.0.yaml -n gke-mldiagnostics
+# kubectl delete -f mldiagnostics-connection-operator-v0.21.0.yaml -n gke-mldiagnostics
 ```
 
 ### Install ML Diagnostics SDK
