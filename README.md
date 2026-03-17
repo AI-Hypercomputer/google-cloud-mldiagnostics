@@ -178,7 +178,18 @@ kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/
 kubectl delete -f https://github.com/cert-manager/cert-manager/releases/download/v1.13.0/cert-manager.yaml -n cert-manager
 ```
 
+
+
 ##### Install or upgrade
+
+To list all available versions for the helm charts in the Google Cloud Artifact Registry, run:
+
+```bash
+gcloud artifacts tags list \
+  --package=mldiagnostics-injection-webhook \
+  --repository=mldiagnostics-webhook-and-operator-helm \
+  --location=us --project=ai-on-gke
+```
 
 We recommend using `helm upgrade --install` to both install for the first time or upgrade an existing installation.
 
@@ -186,6 +197,7 @@ We recommend using `helm upgrade --install` to both install for the first time o
 helm upgrade --install mldiagnostics-injection-webhook \
   --namespace=gke-mldiagnostics \
   --create-namespace \
+  --version 0.23.0 \
   oci://us-docker.pkg.dev/ai-on-gke/mldiagnostics-webhook-and-operator-helm/mldiagnostics-injection-webhook
 ```
 
@@ -204,17 +216,24 @@ To completely remove the injection webhook, follow these steps:
 helm uninstall mldiagnostics-injection-webhook -n gke-mldiagnostics
 ```
 
-Or you can use gcloud and kubectl:
+Or you can use gcloud and kubectl. To list all available YAML versions:
 
 ```bash
-gcloud artifacts generic download --repository=mldiagnostics-webhook-and-operator-yaml --location=us --package=mldiagnostics-injection-webhook --version=v0.16.0 --destination=./ --project=ai-on-gke
+gcloud artifacts versions list \
+  --package=mldiagnostics-injection-webhook \
+  --repository=mldiagnostics-webhook-and-operator-yaml \
+  --location=us --project=ai-on-gke
+```
+
+```bash
+gcloud artifacts generic download --repository=mldiagnostics-webhook-and-operator-yaml --location=us --package=mldiagnostics-injection-webhook --version=v0.23.0 --destination=./ --project=ai-on-gke
 kubectl create namespace gke-mldiagnostics
-# it needs to be installed inside namespace gke-mldiagnostics. If not, need to change mldiagnostics-injection-webhook-v0.16.0.yaml
-kubectl apply -f mldiagnostics-injection-webhook-v0.16.0.yaml -n gke-mldiagnostics
+# it needs to be installed inside namespace gke-mldiagnostics. If not, need to change mldiagnostics-injection-webhook-v0.23.0.yaml
+kubectl apply -f mldiagnostics-injection-webhook-v0.23.0.yaml -n gke-mldiagnostics
 
 ## Uninstall. First, uninstall MutatingWebhookConfiguration, then delete yaml.
 # kubectl delete MutatingWebhookConfiguration mldiagnostics-injection-webhook-mutating-webhook-config
-# kubectl delete -f  mldiagnostics-injection-webhook-v0.16.0.yaml -n gke-mldiagnostics
+# kubectl delete -f  mldiagnostics-injection-webhook-v0.23.0.yaml -n gke-mldiagnostics
 ```
 
 #### Label workload
@@ -248,6 +267,15 @@ options:
 
 ##### Install or upgrade
 
+To list all available versions for the helm charts in the Google Cloud Artifact Registry, run:
+
+```bash
+gcloud artifacts tags list \
+  --package=mldiagnostics-connection-operator \
+  --repository=mldiagnostics-webhook-and-operator-helm \
+  --location=us --project=ai-on-gke
+```
+
 For seamless on-demand profiling on GKE, we recommend deploying the GKE connection
 operator along with the injection webhook into the GKE cluster. This will ensure
 that your machine learning run knows which GKE nodes it is running on and so the
@@ -260,7 +288,7 @@ We recommend using `helm upgrade --install` to both install for the first time o
 | JAX Version | `mldiagnostics-connection-operator` Helm Chart Version |
 | :--- | :--- |
 | 0.8.x | 0.21.0 |
-| 0.9.x+ | 0.21.0 |
+| 0.9.x+ | 0.21.0+ |
 
 ###### For JAX 0.8.x:
 ```bash
@@ -290,7 +318,14 @@ values file or key-value pair respectively for the chart.
 helm uninstall mldiagnostics-connection-operator -n gke-mldiagnostics
 ```
 
-Or you can use gcloud and kubectl:
+Or you can use gcloud and kubectl. To list all available YAML versions:
+
+```bash
+gcloud artifacts versions list \
+  --package=mldiagnostics-connection-operator \
+  --repository=mldiagnostics-webhook-and-operator-yaml \
+  --location=us --project=ai-on-gke
+```
 
 ```bash
 gcloud artifacts generic download --repository=mldiagnostics-webhook-and-operator-yaml --location=us --package=mldiagnostics-connection-operator --version=v0.21.0 --destination=./ --project=ai-on-gke
@@ -300,6 +335,7 @@ kubectl apply -f mldiagnostics-connection-operator-v0.21.0.yaml -n gke-mldiagnos
 ## use this to uninstall
 # kubectl delete -f mldiagnostics-connection-operator-v0.21.0.yaml -n gke-mldiagnostics
 ```
+
 
 ### Install ML Diagnostics SDK
 
