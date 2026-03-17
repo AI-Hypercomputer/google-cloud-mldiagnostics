@@ -18,47 +18,63 @@
 - [Overview](#overview)
   - [Github Repo](#github-repo)
   - [Machine Learning Run Intro](#machine-learning-run-intro)
-- [Setup](#setup)
-  - [Enable API](#enable-api)
+- [Prerequisites](#prerequisites)
+  - [Enable Cluster Director API](#enable-api)
   - [IAM Permissions](#iam-permissions)
-  - [Google Storage Bucket](#google-storage-bucket)
   - [Configure GKE Cluster](#configure-gke-cluster)
-  - [Install SDK](#install-sdk)
+  - [Install ML Diagnostics SDK](#install-ml-diagnostics-sdk)
 - [How to use](#how-to-use)
+  - [Enable Cloud Logging](#enable-cloud-logging)
+  - [Enable Debug Logging](#enable-debug-logging)
   - [Creating a machine learning run](#creating-a-machine-learning-run)
   - [Write configs using yaml or json](#write-configs-using-yaml-or-json)
   - [Collect metrics](#collect-metrics)
   - [Programmatic Profile Capture](#programmatic-profile-capture)
   - [Multi-host (process) profiling](#multi-host-process-profiling)
   - [Enable On-Demand Profile Capture](#enable-on-demand-profile-capture)
-  - [Using ML Diagnostics with Maxtext](#using-ml-diagnostics-with-maxtext)
+  - [Viewing Logs, Metrics and Profiles](#viewing-logs-metrics-and-profiles)
+  - [Package Workload with SDK with Dockerfile for GKE](#package-workload-with-sdk-with-dockerfile-for-gke)
+  - [Deploy Workload with SDK integrated](#deploy-workload-with-sdk-integrated)
+- [Using ML Diagnostics with Maxtext](#using-ml-diagnostics-with-maxtext)
 
 ## Overview
 
-Google Cloud ML Diagnostics is an end-to-end managed platform for ML Engineers
-to optimize and diagnose their AI/ML workloads on Google Cloud. The product
-allows ML Engineers to collect and visualize all their workload metrics, configs
-and profiles with one single platform, all within the same UI. This platform
-works for any ML workload (training, inference, etc) including working with
-Maxtext/Maxdiffusion as well as any orchestrator on TPU including GKE as well as
-custom orchestrator. The current product offering focuses on workloads running
-on XLA-based frameworks (JAX, Pytorch XLA, Tensorflow/Keras) on Google Cloud
-TPUs and GPUs. Current support is for JAX on TPU only.
+**Note:** Google Cloud ML Diagnostics supports only JAX on Google Cloud TPUs today.
 
-Google Cloud ML Diagnostics includes the following features:
+Google Cloud ML Diagnostics is an end-to-end managed platform for optimizing
+and diagnosing AI/ML workloads on Google Cloud. The platform lets you collect
+and visualize all workload metrics, configs and profiles within a single
+platform. ML Diagnostics is applicable to both training and inference
+workloads, and is compatible with all orchestrators on TPU, including Google
+Kubernetes Engine and custom orchestrators.
 
-- **SDK**: An open source ML Diagnostics SDK to use with your ML workload in order to enable managed ML workload diagnostics experience on Google Cloud
-- Integration with JAX and Pytorch framework and libraries (only JAX supported for Preview)
-- **Metrics/configs/profiles management**:
-  - Track workload metrics, including model quality, model performance and system metrics.
-  - Track workload configs including software configs, system configs as well as user-defined configs
-  - Manage profile sessions
-- **Managed XProf**: Managed profiling with XProf, which allows faster loading
-of large profiles, supports multiple users simultaneously accessing profiles and
+ML Diagnostics includes the following features:
+
+- **Create and track Machine Learning runs**: Use ML Diagnostics platform to
+create and register your machine learning runs either through Google Cloud CLI or by
+integrating ML Diagnostics SDK with your workload. Creating Machine learning
+runs allows users to deploy managed XProf instances as well as collect/manage
+workload metrics, configs and profile sessions.
+- **Google Cloud CLI experience**: Use ML Diagnostics APIs through Google Cloud CLI to
+register and manage ML runs, deploy managed XProf resources, visualize already
+captured XProf profile sessions in GCS bucket and trigger profile capture from CLI
+- **Python SDK**: An open-source [ML Diagnostics SDK](https://github.com/AI-Hypercomputer/google-cloud-mldiagnostics) that users can integrate
+with their ML workload to get the complete ML workload diagnostics experience to
+collect/manage workload metrics, configs and profiles on Google Cloud.
+- **Managed profiling**: ML Diagnostics deploys a Managed instance of [XProf](https://openxla.org/xprof)
+with a scalable backend into the customer's account which allows faster loading of
+large profiles, supports multiple users simultaneously accessing profiles and
 supports easy to use out-of-the-box features such as multi-host profiling and
 on-demand profiling.
-- Visualization of metrics/configs/profiles in both Cluster Director and Google **Kubernetes Engine** on the Google Cloud console
-- Link sharing for ML runs and profiles for easy collaboration
+- **Workload metrics**: Track workload metrics, including model quality, model
+performance and system metrics.
+- **Workload Config management**: Track workload configs including software
+configs, system configs as well as user-defined configs.
+- **Visualizations in Cluster Director and GKE**: Visualize metrics, configs,
+and profiles in Cluster Director and Google Kubernetes Engine in the Google
+Cloud console.
+- **Link sharing**: ML Diagnostics allows easy collaboration with shareable
+links for profiles and machine learning run information.
 
 ### Github Repo
 
@@ -88,11 +104,7 @@ attached to the MLRun.
 
 Before using ML Diagnostics, enable the Cluster Director API and add the required IAM permissions.
 
-### Enable Cluster Director API
-
-**Note:** The Cluster Director API is not related to [TPU Cluster Director](https://clouddocs.devsite.corp.google.com/tpu/docs/all-capacity-overview).
-
-Google Cloud ML Diagnostics relies on the [Cluster Director API](https://cloud.google.com/products/cluster-director) for accessing gcloud commands, for collecting metrics/configs/profiles in the platform and for accessing the UI.
+### Enable Cluster Director API {#enable-api}
 
 **Note:** You do not need to use the Cluster Director for deploying and managing your clusters in order to use the ML Diagnostics product. ML Diagnostics product works with clusters managed by GKE and Cluster Director or even clusters using custom orchestrators. ML Diagnostics is part of the Cluster Director family of APIs, but doesn't depend on users using the Cluster Director product itself.
 
@@ -102,14 +114,8 @@ For more on enabling Cluster Director API, see [Enabling an API in your Google C
 
 The Google Service Account used by your workload requires the following IAM roles assigned on the project:
 
-**If using ML Diagnostics SDK:**
-
 1. `roles/clusterdirector.editor`: For full access to create and manage MLRun resources and view the user interface.
 1. `roles/logging.logWriter`: To write logs and metrics to Google Cloud Logging.
-1. `roles/storage.objectUser`: To save profiles to the GCS bucket specified in `machinelearning_run`.
-
-**If using ML Diagnostics gcloud CLI:**
-
 1. `roles/storage.objectUser`: To save profiles to the GCS bucket specified in `machinelearning_run`.
 
 For read-only access (viewing UI only, not creating MLRuns), `roles/clusterdirector.viewer` is sufficient.
@@ -287,7 +293,7 @@ kubectl apply -f mldiagnostics-connection-operator-v0.16.0.yaml -n gke-mldiagnos
 # kubectl delete -f mldiagnostics-connection-operator-v0.16.0.yaml -n gke-mldiagnostics
 ```
 
-### Install SDK
+### Install ML Diagnostics SDK
 
 Pip install [SDK](https://pypi.org/project/google-cloud-mldiagnostics/)
 
@@ -357,7 +363,7 @@ DEBUG:google_cloud_mldiagnostics.core.global_manager:current run details: {'name
 
 In order to use Google Cloud ML Diagnostics platform, you will need to create a
 machine learning run. This requires instrumenting your ML workload with the SDK
-to perform logging, metric collection, and profile tracing.
+to perform logging, metrics collection, and profile tracing.
 
 Below is a basic example of how to initialize Cloud Logging, create an MLRun,
 record metrics, and capture a profile:
@@ -495,13 +501,13 @@ capturing individual data points, and `metrics.record_metrics()` for recording
 multiple metrics in a single batch. Both functions write metrics to Cloud
 Logging, enabling subsequent visualization and analysis.
 
-For example, to record a single metric:
+#### Single metric recording
 
 ```python
 metrics.record(metric_types.MetricType.LOSS, 0.123, step=1)
 ```
 
-To record multiple metrics efficiently, use `record_metrics`:
+#### Multiple metric recording
 
 ```python
 from google_cloud_mldiagnostics import metric_types
@@ -541,7 +547,7 @@ keys that the user can write metrics values to these keys by themselves.
 1. Model perf metric keys - `STEP_TIME`, `THROUGHPUT`, `LATENCY`, `MFU`, `TFLOPS`
 
 These predefined metrics as well as other user-defined metrics can be recorded
-with x-axis as `time` or as `step`.
+with x-axis as `time`, or both `time` and `step`.
 
 User can record any custom metric in the workload as shown below:
 
@@ -668,7 +674,7 @@ need to specify just index 0 in the list.
 ### Enable On-Demand Profile Capture
 
 You can use on-demand profile capture when you want to capture profiles in an
-ad hoc manner, or when you don't enable programmatic profile capture. This can
+adhoc manner, or when you don't enable programmatic profile capture. This can
 be helpful when you see a problem with your model metrics during the run and
 want to capture profiles at that instant for some period in order to diagnose
 the problem.
@@ -701,16 +707,24 @@ automatically.
 
 ### Viewing Logs, Metrics and Profiles
 
-Once your workload is running with the SDK and Cloud Logging configured:
+Once your workload is running with the SDK and Cloud Logging configured you will
+see all machine learning runs on Google Cloud Pantheon console in both Cluster
+Director and GKE UI.
 
-*   **Logs and Metrics**: Can be viewed in the Google Cloud Console under
-**Logging > Logs Explorer**. Metrics recorded via `metrics.record()` are written
-as log entries and can be filtered or used to create log-based metrics.
-*   **Profiles and Run Details**: Can be viewed in the **Cluster Director**
-section of the Google Cloud Console. The `machinelearning_run()` function will
-output a log message containing a direct link to the run in the UI.
+1. In Cluster Director, you can find all your machine learning runs created by ML Diagnostics under Cluster Director -> Diagnostics tab
+2. In GKE, you can find all your machine learning runs created by ML Diagnostics under GKE -> AI/ML -> Diagnostics tab
 
-### Dockerfile Example
+In both Cluster Director and GKE, you will find the following pages:
+
+1. List view table with summary information of all your machine learning runs
+2. Run details for each run with details of configs and run information
+3. Time series charts for all metrics: model metrics, performance metrics, system
+   metrics. You can also view these metrics Cloud Logging under Logging > Logs
+   Explorer. Metrics recorded via `metrics.record()` are written as log entries
+   and can be filtered or used to create log-based metrics.
+4. Profiles tab with all profile sessions (programmatic or on-demand) for that particular run, with links to the Xprof viewer (Xprof UI will open in a separate browser tab). In this profiles tab, you can also capture an on-demand profile session directly from the UI.
+
+### Package Workload with SDK with Dockerfile for GKE
 
 Below is an example Dockerfile snippet for packaging an application that uses
 the `google-cloud-mldiagnostics` SDK. Remember to include `google-cloud-logging`
@@ -741,31 +755,7 @@ WORKDIR /app
 CMD ["python", "your_train_script.py"]
 ```
 
-### Using ML Diagnostics with Maxtext
-
-For users who use Maxtext as their ML workload, ML Diagnostics SDK is already pre-integrated with Maxtext. You can enable ML Diagnostics with Maxtext with the `managed_mldiagnostics` flag. If this is enabled, it will:
-- Create a managed MachineLearning run with all the MaxText configs.
-- Upload profiling traces, if the profiling is enabled by `profiler="xplane"`.
-- Upload training metrics, at the defined `log_period` interval.
-
-These are the new flags related to this feature:
-
-```yaml
-managed_mldiagnostics: True  # Whether to enable the managed diagnostics
-managed_mldiagnostics_run_group: "<some-name>"  # Optional. Used to group multiple runs.
-```
-
-To enable ML Diagnostics in Maxtext, you can either change the configuration file of your run, or pass the flags from the command line. 
-
-When you run `MaxText.train`, you can pass these flags:
-
-```bash
-python3 -m MaxText.train src/MaxText/configs/base.yml run_name="demo-mldiagnostics-run-2" model_name="<your_chosen_model>" base_output_directory=gs://<your_gcs_folder>/  dataset_type=synthetic steps=100 log_period=10 profiler=xplane upload_all_profiler_results=True managed_mldiagnostics=True managed_mldiagnostics_run_group="demo-mldiagnostics-group"
-```
-
-`upload_all_profiler_results=True` captures multihost profiles from all hosts.
-
-## Deploy Workload with SDK integrated
+### Deploy Workload with SDK integrated
 
 After integrating the SDK with your workload, you need to package the workload
 in an image and then create your yaml file as `<yaml_name>.yaml` with the image
@@ -801,3 +791,27 @@ because the Diagon sidecar handles its own logging.
 ```bash
 kubectl logs jobs/s5-tpu-slice-0 -n <your-namespace> -c workload
 ```
+
+## Using ML Diagnostics with Maxtext
+
+For users who use Maxtext as their ML workload, ML Diagnostics SDK is already pre-integrated with Maxtext. You can enable ML Diagnostics with Maxtext with the `managed_mldiagnostics` flag. If this is enabled, it will:
+- Create a managed MachineLearning run with all the MaxText configs.
+- Upload profiling traces, if the profiling is enabled by `profiler="xplane"`.
+- Upload training metrics, at the defined `log_period` interval.
+
+These are the new flags related to this feature:
+
+```yaml
+managed_mldiagnostics: True  # Whether to enable the managed diagnostics
+managed_mldiagnostics_run_group: "<some-name>"  # Optional. Used to group multiple runs.
+```
+
+To enable ML Diagnostics in Maxtext, you can either change the configuration file of your run, or pass the flags from the command line. 
+
+When you run `MaxText.train`, you can pass these flags:
+
+```bash
+python3 -m MaxText.train src/MaxText/configs/base.yml run_name="demo-mldiagnostics-run-2" model_name="<your_chosen_model>" base_output_directory=gs://<your_gcs_folder>/  dataset_type=synthetic steps=100 log_period=10 profiler=xplane upload_all_profiler_results=True managed_mldiagnostics=True managed_mldiagnostics_run_group="demo-mldiagnostics-group"
+```
+
+`upload_all_profiler_results=True` captures multihost profiles from all hosts.
