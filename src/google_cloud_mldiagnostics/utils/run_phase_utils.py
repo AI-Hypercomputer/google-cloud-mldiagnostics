@@ -40,6 +40,7 @@ logger = logging.getLogger(__name__)
 
 class RunPhaseMonitor:
   """Encapsulates monitoring state and logic."""
+
   _cleanup_handlers: list[Callable[[], None]] = []
   _cleanup_handlers_lock = threading.Lock()
 
@@ -118,7 +119,7 @@ class RunPhaseMonitor:
     ):
       logger.info("Sending '%s' signal to control plane.", run_phase)
       self._control_plane_client.update_ml_run(
-          name=self._manager.run.name, run_phase=run_phase.value
+          name=self._manager.run.name, force=True, run_phase=run_phase.value
       )
 
   def start(self):
@@ -144,7 +145,5 @@ class RunPhaseMonitor:
       for handler in RunPhaseMonitor._cleanup_handlers:
         try:
           handler()
-        except Exception as e:  # pylint: disable=broad-except-catching
-          logger.exception(
-              "Exception during cleanup handler execution: %s.", e
-          )
+        except Exception:  # pylint: disable=broad-except-catching
+          logger.exception("Exception during cleanup handler execution.")

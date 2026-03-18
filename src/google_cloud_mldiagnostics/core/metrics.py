@@ -153,7 +153,9 @@ class _MetricsRecorder:
       current_mlrun, ml_logging_client = self._get_active_run_and_client()
       is_master_host = host_utils.is_master_host()
     except Exception as e:
-      raise exceptions.RecordingError(f"Error preparing to record metrics: {e}") from e
+      raise exceptions.RecordingError(
+          f"Error preparing to record metrics: {e}"
+      ) from e
 
     metrics_to_write = []
     for metric_info in metrics_data:
@@ -232,7 +234,7 @@ class _MetricsRecorder:
 
 
 class MetricsRecorderThread:
-  """Records specified metrics and update the averaged metrics in control plane in a background thread."""
+  """Records and updates averaged metrics in a background thread."""
 
   def __init__(
       self,
@@ -342,10 +344,14 @@ class MetricsRecorderThread:
   def _collect_loop(self):
     """Continuously collects and records metrics until stop event is set."""
     while not self._stop_event.is_set():
-      self._collect_and_record()
-      self._update_control_plane_time()
-      # Wait for the specified interval, or until the stop event is set.
-      self._stop_event.wait(self._interval_seconds)
+      try:
+        self._collect_and_record()
+        self._update_control_plane_time()
+      except Exception:  # pylint: disable=broad-exception-caught
+        logger.exception("Failed to collect or record metrics")
+      finally:
+        # Wait for the specified interval, or until the stop event is set.
+        self._stop_event.wait(self._interval_seconds)
 
   def _collect_and_record(self):
     """Iterates through metric collectors, calls them, and records results."""
@@ -377,6 +383,7 @@ class MetricsRecorderThread:
       control_plane_client_instance.update_ml_run(
           name=ml_run.name,
           force=True,
+          run_phase="ACTIVE",
       )
 
 # Global metrics recorder instance
