@@ -19,7 +19,7 @@
   - [Github Repo](#github-repo)
   - [Machine Learning Run Intro](#machine-learning-run-intro)
 - [Prerequisites](#prerequisites)
-  - [Enable Cluster Director API](#enable-api)
+  - [Enable Cluster Director API](#enable-cluster-director-api)
   - [IAM Permissions](#iam-permissions)
   - [Configure GKE Cluster](#configure-gke-cluster)
   - [Install ML Diagnostics SDK](#install-ml-diagnostics-sdk)
@@ -104,7 +104,7 @@ attached to the MLRun.
 
 Before using ML Diagnostics, enable the Cluster Director API and add the required IAM permissions.
 
-### Enable Cluster Director API {#enable-api}
+### Enable Cluster Director API
 
 **Note:** You do not need to use the Cluster Director for deploying and managing your clusters in order to use the ML Diagnostics product. ML Diagnostics product works with clusters managed by GKE and Cluster Director or even clusters using custom orchestrators. ML Diagnostics is part of the Cluster Director family of APIs, but doesn't depend on users using the Cluster Director product itself.
 
