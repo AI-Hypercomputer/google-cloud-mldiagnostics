@@ -107,21 +107,18 @@ def _get_sha256_hash(input_string: str) -> str:
   return hex_digest
 
 
-def _gke_run_identifier(name: str, workload_details: dict[str, Any]) -> str:
+def _gke_run_identifier(workload_details: dict[str, Any]) -> str:
   """Returns the unique identifier for the gke workload.
 
   Args:
-    name: The name of the MLRun.
     workload_details: A dictionary containing workload details.
 
-  Example output:
-  cluster-test_namespace-test_kind-test_workloadid-test_20240520-110840
-  """
+  Example output (SHA-256 hash of the raw string identifier):
+  4d1c1bd2a83e01fcb88a8d05e326071ab8ca9ec58f4a187a27ebf9dcd87b3225
 
-  if not name:
-    raise ValueError(
-        "Could not generate ML Run identifier due to missing MLRun name."
-    )
+  Raw string identifier format used for hashing:
+  clustername_namespace_kind_workloadid_YYYYMMDD-HHmmss
+  """
 
   if not workload_details:
     raise ValueError(
@@ -176,15 +173,10 @@ def _gke_run_identifier(name: str, workload_details: dict[str, Any]) -> str:
   )
 
   identifier = (
-      (
-          f"{name}"
-          f"-{cluster}"
-          f"-{workload_details['namespace']}"
-          f"-{workload_details['kind']}-{workload_details['id']}"
-          f"-{transformed_timestamp}"
-      )
-      .replace("_", "-")
-      .lower()
+      f"{cluster}"
+      f"_{workload_details['namespace']}"
+      f"_{workload_details['kind']}_{workload_details['id']}"
+      f"_{transformed_timestamp}"
   )
   return _get_sha256_hash(identifier)
 
@@ -212,11 +204,11 @@ def get_workload_details() -> dict[str, Any] | None:
   return _get_gke_workload_details()
 
 
-def get_identifier(name: str, workload_details: dict[str, Any]) -> str:
-  """Returns the GCS path for the workload."""
+def get_identifier(workload_details: dict[str, Any]) -> str:
+  """Returns a unique SHA-256 identifier for the workload."""
   # TODO: [INTERNAL] - Add support for non-GKE workloads.
 
-  return _gke_run_identifier(name, workload_details)
+  return _gke_run_identifier(workload_details)
 
 
 def sanitize_identifier(identifier: str) -> str:

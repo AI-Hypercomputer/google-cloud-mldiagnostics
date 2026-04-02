@@ -222,6 +222,9 @@ class ControlPlaneClient:
           ]
         if workload_details["labels"]:
           gke_workload_details["labels"] = workload_details["labels"]
+        creation_timestamp = workload_details.get("creation-timestamp")
+        if creation_timestamp:
+          gke_workload_details["createTime"] = creation_timestamp
         payload["workloadDetails"] = {"gke": gke_workload_details}
 
     # Sanitize the name for machineLearningRunId
