@@ -16,6 +16,7 @@
 
 import logging
 import threading
+import time
 from typing import Optional
 
 from google_cloud_mldiagnostics import _version
@@ -34,6 +35,7 @@ class GlobalRunManager:
 
   _instance: Optional["GlobalRunManager"] = None
   _lock = threading.RLock()
+  _PROFILER_TARGET_CREATION_TIMEOUT_SEC = 20
 
   def __new__(cls) -> "GlobalRunManager":
     """Ensure only one instance is created (thread-safe singleton)."""
@@ -49,6 +51,8 @@ class GlobalRunManager:
           cls._instance._control_plane_client: Optional[
               control_plane_client.ControlPlaneClient
           ] = None
+          cls._instance._timer_pt_creation: threading.Timer | None = None
+          cls._instance._pt_creation_start_time: float | None = None
     return cls._instance
 
   def initialize(self, mlrun: mlrun_types.MLRun) -> None:
@@ -57,6 +61,10 @@ class GlobalRunManager:
     Args:
         mlrun: The ML run to initialize.
     """
+    # Check and register ML host as Profiler Target, run this before acquiring
+    # the lock to avoid deadlock.
+    self.create_profiler_target()
+
     with self._lock:
       if self._initialized:
         logger.info(
@@ -67,6 +75,11 @@ class GlobalRunManager:
       self._ml_run = mlrun
       self._current_logging_client = logging_client.LoggingClient(
           project_id=mlrun.project
+      )
+      self._control_plane_client = control_plane_client.ControlPlaneClient(
+          project_id=mlrun.project,
+          location=mlrun.location,
+          environment=mlrun.environment,
       )
 
       if not host_utils.is_master_host():
@@ -93,20 +106,13 @@ class GlobalRunManager:
               run_id=mlrun.name,
               location=mlrun.location,
           )
-        except Exception:
+        except Exception:  # pylint: disable=broad-exception-caught
           logger.exception(
               "Failed to write configs to Cloud Logging for run: %s",
               mlrun.name,
           )
         del mlrun.configs["userConfigs"]
 
-      # Initialize ControlPlaneClient with project and location from MLRun
-      # Only initialize on master host to avoid duplicate MLRun creation.
-      self._control_plane_client = control_plane_client.ControlPlaneClient(
-          project_id=mlrun.project,
-          location=mlrun.location,
-          environment=mlrun.environment,
-      )
       try:
         logger.info("Checking for existing ML run with name: %s", mlrun.name)
         response = self._control_plane_client.get_ml_run(mlrun.name)
@@ -116,7 +122,7 @@ class GlobalRunManager:
         )
         if response.get("runPhase") == mlrun_types.RunPhase.PHASE_FAILED.value:
           logger.info(
-              "Existing ML run '%s' is in FAILED state, updating to ACTIVE.",
+              "Existing ML run %r is in FAILED state, updating to ACTIVE.",
               mlrun.name,
           )
           self._control_plane_client.update_ml_run(
@@ -125,16 +131,13 @@ class GlobalRunManager:
           )
         else:
           logger.info(
-              "ML run '%s' with status %s already exists, skipping"
-              " creation.",
+              "ML run '%s' with status %s already exists, skipping creation.",
               mlrun.name,
               response.get("runPhase"),
           )
       except requests.exceptions.HTTPError as e:
         if e.response is not None and e.response.status_code == 404:
-          logger.info(
-              "ML run '%s' not found, creating a new one.", mlrun.name
-          )
+          logger.info("ML run '%s' not found, creating a new one.", mlrun.name)
           # Prepare artifacts configuration if gcs_path is provided
           artifacts = None
           if mlrun.gcs_path:
@@ -193,7 +196,115 @@ class GlobalRunManager:
       except Exception as e_get:
         logger.error("Failed to get ML run '%s': %s", mlrun.name, e_get)
         raise
+
       self._initialized = True
+
+  def _start_profiler_target_creation_timer(self, wait_time_sec: float) -> None:
+    """Start profiler target creation timer.
+
+    Args:
+        wait_time_sec: The time in seconds to wait before attempting to create
+          the profiler target again.
+
+    Raises:
+        TimeoutError: If the profiler target creation has exceeded the maximum
+          allowed timeout.
+    """
+    if (
+        self._pt_creation_start_time is not None
+        and time.time() - self._pt_creation_start_time
+        > self._PROFILER_TARGET_CREATION_TIMEOUT_SEC
+    ):
+      raise TimeoutError(
+          "Profiler target creation time exceeded wait time of"
+          f" {self._PROFILER_TARGET_CREATION_TIMEOUT_SEC} seconds."
+      )
+    logger.info(
+        "Starting profiler target creation timer with wait time: %s",
+        wait_time_sec,
+    )
+    self._timer_pt_creation = threading.Timer(
+        wait_time_sec, self.create_profiler_target
+    )
+    self._timer_pt_creation.start()
+
+  def create_profiler_target(self) -> None:
+    """Create profiler targets for the ML run.
+
+    Raises:
+      TimeoutError: If profiler target creation time exceeds the defined
+        timeout.
+      requests.exceptions.HTTPError: If an HTTP error occurs during API calls
+        to the control plane.
+      Exception: For other unexpected errors during profiler target creation.
+    """
+    with self._lock:
+      timer = self._timer_pt_creation
+      if timer is not None:
+        logger.info("Cancelling profiler target creation timer.")
+        timer.cancel()
+        self._timer_pt_creation = None
+
+      if self._pt_creation_start_time is None:
+        logger.info(
+            "Starting profiler target creation timer. Current time: %s",
+            time.time(),
+        )
+        self._pt_creation_start_time = time.time()
+
+      if (
+          not self.is_initialized()
+          or self.run_id is None
+          or self._control_plane_client is None
+      ):
+        logger.warning(
+            "Prerequisites not met. initialized: %r, run_id: %r,"
+            " control_plane_client: %r, retrying profiler target creation after"
+            " 0.2 seconds.",
+            self.is_initialized(),
+            self.run_id,
+            self._control_plane_client,
+        )
+        self._start_profiler_target_creation_timer(0.2)
+        return
+
+      client = self._control_plane_client
+      try:
+        client.get_ml_run(self.run_id)
+      except requests.exceptions.HTTPError as e_get:
+        if e_get.response is not None and (
+            e_get.response.status_code == 404
+            or 500 <= e_get.response.status_code < 600
+        ):
+          logger.info(
+              "ML run %r not found, waiting for master node to create it.",
+              self.run_id,
+          )
+          self._start_profiler_target_creation_timer(0.5)
+          return
+
+        logger.error("Failed to get ML run '%s': %s", self.run_id, e_get)
+        raise
+
+      try:
+        host_name = host_utils.get_hostname()
+        node_index = host_utils.get_process_index()
+        client.create_profiler_target(
+            ml_run_name=self.run_id,
+            name=f"{host_name}-{node_index}",
+            is_master=host_utils.is_master_host(),
+            hostname=host_name,
+            node_index=node_index,
+        )
+        logger.info(
+            "Successfully created profiler target for ML run: %s",
+            self.run_id,
+        )
+        # Clear the start time after successful creation
+        self._pt_creation_start_time = None
+      except Exception as e_create:
+        logger.error("Failed to create profiler target: %s", e_create)
+        raise
 
   def has_active_run(self) -> bool:
     """Check if there's an active run.
@@ -266,11 +377,18 @@ class GlobalRunManager:
   ) -> Optional[control_plane_client.ControlPlaneClient]:
     """Get the current control plane client."""
     with self._lock:
-      return self._control_plane_client
+      if host_utils.is_master_host():
+        return self._control_plane_client
+      return None
 
   def clear(self) -> None:
     """Clear the current run state."""
     with self._lock:
+      if self._timer_pt_creation is not None:
+        logger.info("Cancelling profiler target creation timer during clear.")
+        self._timer_pt_creation.cancel()
+        self._timer_pt_creation = None
+      self._pt_creation_start_time = None
       self._ml_run = None
       self._current_logging_client = None
       self._control_plane_client = None

@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 
 class ControlPlaneClient:
-  """Client for communicating with Google Cloud Hypercompute Cluster ML Run service."""
+  """Client for communicating with the Hypercompute Cluster ML Run service."""
 
   def __init__(
       self,
@@ -92,14 +92,15 @@ class ControlPlaneClient:
     try:
       response.raise_for_status()
     except requests.exceptions.HTTPError:
-      logger.exception(
+      logger.error(
           "Get Operation request failed: status_code=%s, content=%s",
           response.status_code,
           response.text,
       )
       raise
     json_response = response.json()
-    logger.debug("Get Operation response: %s", pprint.pformat(json_response))
+    if logger.isEnabledFor(logging.DEBUG):
+      logger.debug("Get Operation response: %s", pprint.pformat(json_response))
     return json_response
 
   def _wait_for_operation(
@@ -172,8 +173,7 @@ class ControlPlaneClient:
         name: Name of the run
         display_name: Display name for the run
         run_phase: Phase of the run (ACTIVE, COMPLETE, FAILED)
-        configs: Configuration settings (softwareConfigs,
-          hardwareConfigs)
+        configs: Configuration settings (softwareConfigs, hardwareConfigs)
         tools: List of tools to enable (e.g., XProf, NSys)
         artifacts: Artifacts configuration (e.g., gcsPath)
         run_group: Run group grouping identifier
@@ -247,25 +247,27 @@ class ControlPlaneClient:
     try:
       response.raise_for_status()
     except requests.exceptions.HTTPError:
-      logger.exception(
+      logger.error(
           "Create ML Run request failed: status_code=%s, content=%s",
           response.status_code,
           response.text,
       )
       raise
     json_response = response.json()
-    logger.debug("Create ML Run response: %s", pprint.pformat(json_response))
+    if logger.isEnabledFor(logging.DEBUG):
+      logger.debug("Create ML Run response: %s", pprint.pformat(json_response))
 
     if not json_response.get("done"):
       operation = self._wait_for_operation(json_response["name"])
     else:
       operation = json_response
 
-    logger.info("Create ML Run operation: %s", pprint.pformat(operation))
+    if logger.isEnabledFor(logging.INFO):
+      logger.info("Create ML Run operation: %s", pprint.pformat(operation))
 
     if operation.get("error"):
       raise requests.exceptions.HTTPError(
-          f"Operation {operation['name']} failed: {operation['error']}"
+          f"Operation {operation['name']!r} failed: {operation['error']!r}"
       )
 
     if operation.get("response"):
@@ -307,14 +309,15 @@ class ControlPlaneClient:
       if response.status_code == 404:
         logger.warning("ML run '%s' not found.", name)
       else:
-        logger.exception(
+        logger.error(
             "Get ML Run request failed: status_code=%s, content=%s",
             response.status_code,
             response.text,
         )
       raise
     json_response = response.json()
-    logger.debug("Get ML Run response: %s", pprint.pformat(json_response))
+    if logger.isEnabledFor(logging.DEBUG):
+      logger.debug("Get ML Run response: %s", pprint.pformat(json_response))
     return json_response
 
   def update_ml_run(
@@ -323,7 +326,10 @@ class ControlPlaneClient:
       force: bool = False,
       run_phase: Optional[str] = None,
   ) -> Dict[str, Any]:
-    """Update an existing ML run using the Google Cloud API by sending the full resource.
+    """Update an existing ML run.
+
+    This method updates the ML run by sending the full resource to the Google
+    Cloud API.
 
     Args:
         name: Name of the run to update
@@ -369,12 +375,95 @@ class ControlPlaneClient:
     try:
       response.raise_for_status()
     except requests.exceptions.HTTPError:
-      logger.exception(
+      logger.error(
           "Update ML Run request failed: status_code=%s, content=%s",
           response.status_code,
           response.text,
       )
       raise
     json_response = response.json()
-    logger.debug("Update ML Run response: %s", pprint.pformat(json_response))
+    if logger.isEnabledFor(logging.DEBUG):
+      logger.debug("Update ML Run response: %s", pprint.pformat(json_response))
     return json_response
+
+  def create_profiler_target(
+      self,
+      *,
+      ml_run_name: str,
+      name: str,
+      is_master: bool,
+      hostname: str,
+      node_index: int,
+  ) -> None:
+    """Create a profiler target for the ML run.
+
+    Args:
+        ml_run_name: The name of the ML run.
+        name: Name of the profiler target
+        is_master: Whether the target is the master host
+        hostname: Hostname of the target
+        node_index: Index of the node in the cluster
+
+    Raises:
+        requests.exceptions.RequestException: If the HTTP request fails
+    """
+    profiler_target_url = f"{self.ml_runs_path}/{ml_run_name}/profilerTargets"
+    params = {"profiler_target_id": name}
+    payload = {
+        "name": name,
+        "isMaster": is_master,
+        "hostname": hostname,
+        "nodeIndex": node_index,
+    }
+
+    logger.debug(
+        "Create a profiler target: url=%s, params=%r, payload=%r",
+        profiler_target_url,
+        params,
+        payload,
+    )
+    response = requests.post(
+        profiler_target_url,
+        headers=self._get_headers(),
+        params=params,
+        json=payload,
+    )
+
+    try:
+      response.raise_for_status()
+    except requests.exceptions.HTTPError:
+      if response.status_code == 409:
+        logger.warning(
+            "Profiler target '%s/%s' already exists, ignoring the "
+            "create request.",
+            profiler_target_url,
+            name,
+        )
+        return
+      else:
+        logger.error(
+            "Create profiler target request failed: status_code=%s, content=%s",
+            response.status_code,
+            response.text,
+        )
+        raise
+    json_response = response.json()
+    if logger.isEnabledFor(logging.DEBUG):
+      logger.debug(
+          "Create profiler target response: %s", pprint.pformat(json_response)
+      )
+
+    if not json_response.get("done"):
+      operation = self._wait_for_operation(json_response["name"])
+    else:
+      operation = json_response
+
+    if logger.isEnabledFor(logging.INFO):
+      logger.info(
+          "Create profiler target operation: %s", pprint.pformat(operation)
+      )
+
+    if operation.get("error"):
+      raise requests.exceptions.HTTPError(
+          f"Operation {operation['name']!r} failed: {operation['error']!r}"
+      )
