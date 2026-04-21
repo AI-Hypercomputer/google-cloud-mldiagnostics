@@ -38,9 +38,6 @@ def record(
       labels: Optional additional labels.
       record_on_all_hosts: Whether to record metrics on all hosts.
 
-  Raises:
-      RecordingError: If no active run or recording fails.
-
   Example:
       metrics.record(MetricType.TF_FLOPS, per_device_tf_flops)
       metrics.record(MetricType.LEARNING_RATE, learning_rate)
@@ -71,9 +68,6 @@ def record_metrics(
         (dict).
       record_on_all_hosts: Whether to record metrics on all hosts.
       step: Optional step number to apply to all metrics that don't have one.
-
-  Raises:
-      RecordingError: If no active run or recording fails.
 
   Example:
       metrics.record_metrics([

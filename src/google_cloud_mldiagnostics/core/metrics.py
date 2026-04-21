@@ -14,10 +14,16 @@
 
 """Module for recording metrics within ML runs."""
 
+from __future__ import annotations
+
+import collections
+from collections.abc import Mapping, Sequence
+import copy
 import logging
+import queue
 import statistics
 import threading
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable
 
 from google_cloud_mldiagnostics.clients import control_plane_client
 from google_cloud_mldiagnostics.clients import logging_client
@@ -44,12 +50,181 @@ class _MetricsRecorder:
         metric_types.MetricType.HBM_UTILIZATION.value,
         metric_types.MetricType.TPU_TENSORCORE_UTILIZATION.value,
     )
-    self._metric_tracker: dict[str, dict[str, Any]] = {}
+    self._metric_tracker: dict[str, dict[str, Any]] = collections.defaultdict(
+        lambda: {"num_records": 0, "avg": 0.0}
+    )
     self._ml_run_name = None
+    self._lock = threading.Lock()
+    self._is_master_host = None
+
+    # Async metrics queue
+    self._queue = queue.Queue(maxsize=10_000)
+    self._stop_event = threading.Event()
+    self._worker_thread = threading.Thread(
+        target=self._flush_metrics_worker, daemon=True
+    )
+    self._worker_thread.start()
+
+  def _extract_metric_value(
+      self, metric_name: str, value: int | float | Sequence[float]
+  ) -> float | None:
+    """Extract a single float metric value from the input.
+
+    Args:
+      metric_name: The name of the metric.
+      value: The raw value, which can be an int, float, or sequence of floats.
+
+    Returns:
+      A float representing the metric value, or None if extraction fails.
+    """
+    if isinstance(value, (list, tuple)):
+      if not value:
+        logger.warning(
+            "Metric '%s' has an empty list value: %s", metric_name, value
+        )
+        return None
+      try:
+        return statistics.mean(value)
+      except statistics.StatisticsError:
+        logger.warning(
+            "Could not calculate mean for metric %s with value %s",
+            metric_name,
+            value,
+        )
+        return None
+    if isinstance(value, (int, float)):
+      return float(value)
+    logger.warning(
+        "Unsupported metric value type %s for %s",
+        type(value),
+        metric_name,
+    )
+    return None
+
+  def _process_single_metric_item(
+      self, item: Mapping[str, Any], is_master_host: bool
+  ) -> dict[str, Any] | None:
+    """Processes a single metric item from the queue.
+
+    Args:
+      item: The metric item dictionary from the queue.
+      is_master_host: Whether the current host is the master host.
+
+    Returns:
+      A dictionary representing the metric to be written if it should be
+      recorded, otherwise None.
+    """
+    metric_info = item["metric_info"]
+    record_on_all_hosts = item["record_on_all_hosts"]
+    metric_name = metric_info.get("metric_name")
+    value = metric_info.get("value")
+    step = metric_info.get("step")
+    labels = metric_info.get("labels")
+
+    if metric_name is None or value is None:
+      logger.warning(
+          "Invalid metric data: metric_name or value is None in item: %s", item
+      )
+      return None
+
+    metric_value = self._extract_metric_value(metric_name, value)
+    if metric_value is None:
+      return None
+
+    # Update the metric tracker
+    if metric_name in self._track_list:
+      with self._lock:
+        tracker = self._metric_tracker[metric_name]
+        num_records = tracker["num_records"]
+        avg = tracker["avg"]
+        tracker["avg"] += (metric_value - avg) / (num_records + 1)
+        tracker["num_records"] = num_records + 1
+
+    if is_master_host or record_on_all_hosts:
+      all_labels = labels.copy() if labels else {}
+      unit = metric_types.METRIC_UNITS.get(metric_name, "1")
+      all_labels.setdefault("unit", unit)
+      return {
+          "metric_name": metric_name,
+          "value": metric_value,
+          "step": step,
+          "labels": all_labels,
+      }
+    return None
+
+  def _flush_metrics_worker(self) -> None:
+    """Continuously pop items from the queue and publish them safely."""
+    raw_items = []
+    while True:
+      try:
+        if not raw_items:
+          first_item = self._queue.get()
+          if first_item is None:
+            self._queue.task_done()
+            break
+          raw_items.append(first_item)
+
+          # Drain any other available items immediately without blocking
+          while not self._queue.empty():
+            raw_items.append(self._queue.get_nowait())
+
+        try:
+          ml_run, logging_client_instance = self._get_active_run_and_client()
+          if self._is_master_host is None:
+            self._is_master_host = host_utils.is_master_host()
+          is_master_host = self._is_master_host
+        except exceptions.NoActiveRunError:
+          # If no active run yet, sleep briefly and retry with current raw_items on next loop
+          self._stop_event.wait(0.5)
+          if self._stop_event.is_set():
+            for _ in raw_items:
+              self._queue.task_done()
+            break
+        else:
+          should_stop = False
+          try:
+            metrics_to_write = []
+            for item in raw_items:
+              if item is None:
+                should_stop = True
+                continue
+
+              metric_to_write = self._process_single_metric_item(
+                  item, is_master_host
+              )
+              if metric_to_write:
+                metrics_to_write.append(metric_to_write)
+
+            if metrics_to_write:
+              try:
+                logging_client_instance.write_metrics(
+                    metrics=metrics_to_write,
+                    run_id=ml_run.name,
+                    location=ml_run.location,
+                )
+              except Exception:
+                logger.exception(
+                    "Error publishing async metrics batch: %s", metrics_to_write
+                )
+          finally:
+            for _ in raw_items:
+              self._queue.task_done()
+            raw_items = []
+
+          if should_stop:
+            break
+
+      except Exception:
+        logger.exception(
+            "Unhandled exception in metrics worker daemon, raw_items: %s",
+            raw_items,
+        )
 
   def _reset_tracker(self):
     """Reset the metric tracker."""
-    self._metric_tracker = {}
+    self._metric_tracker = collections.defaultdict(
+        lambda: {"num_records": 0, "avg": 0.0}
+    )
 
   def _get_active_run_and_client(
       self,
@@ -94,7 +269,7 @@ class _MetricsRecorder:
   def record(
       self,
       metric_name: str,
-      value: int | float | List[float] | None,
+      value: int | float | Sequence[float] | None,
       step: int | None = None,
       labels: dict[str, str] | None = None,
       record_on_all_hosts: bool = False,
@@ -102,17 +277,14 @@ class _MetricsRecorder:
     """Record a single metric value, averaging lists if provided.
 
     Args:
-        metric_name: Name of metric to record.
-        value: Metric value.
-        step: Optional step number (no step label nor step metric if not
-          provided). Note that step metric will be recorded as a separate
-          metric, the later step metric will overwrite the previous one and step
-          information is the same as previous one
-        labels: additional labels.
-        record_on_all_hosts: Whether to record metrics on all hosts.
-
-    Raises:
-        RecordingError: If recording fails (except for rate limiting errors).
+      metric_name: Name of metric to record.
+      value: Metric value.
+      step: Optional step number (no step label nor step metric if not
+        provided). Note that step metric will be recorded as a separate
+        metric, the later step metric will overwrite the previous one and step
+        information is the same as previous one
+      labels: additional labels.
+      record_on_all_hosts: Whether to record metrics on all hosts.
     """
     if value is None:
       logger.debug("Received None value for metric %s", metric_name)
@@ -130,107 +302,46 @@ class _MetricsRecorder:
 
   def get_metric_tracker(self) -> dict[str, dict[str, Any]]:
     """Get the metric tracker."""
-    return self._metric_tracker
+    with self._lock:
+      return copy.deepcopy(self._metric_tracker)
 
   def record_metrics(
       self,
-      metrics_data: List[Dict[str, Any]],
+      metrics_data: Sequence[Mapping[str, Any]],
       record_on_all_hosts: bool = False,
   ) -> None:
     """Record multiple metric values.
 
     Args:
-        metrics_data: A list of dictionaries, where each dictionary
-          represents a metric and contains 'metric_name' (str) and 'value'
-          (int, float, or list), and optionally 'step' (int) and 'labels'
-          (dict).
-        record_on_all_hosts: Whether to record metrics on all hosts.
-
-    Raises:
-        RecordingError: If recording fails.
+      metrics_data: A list of dictionaries, where each dictionary
+        represents a metric and contains 'metric_name' (str) and 'value'
+        (int, float, or list), and optionally 'step' (int) and 'labels'
+        (dict).
+      record_on_all_hosts: Whether to record metrics on all hosts.
     """
-    try:
-      current_mlrun, ml_logging_client = self._get_active_run_and_client()
-      is_master_host = host_utils.is_master_host()
-    except Exception as e:
-      raise exceptions.RecordingError(
-          f"Error preparing to record metrics: {e}"
-      ) from e
-
-    metrics_to_write = []
+    dropped_count = 0
     for metric_info in metrics_data:
-      metric_name = metric_info.get("metric_name")
-      value = metric_info.get("value")
-      step = metric_info.get("step")
-      labels = metric_info.get("labels")
-
-      if metric_name is None or value is None:
-        logger.warning("Skipping metric with missing name or value.")
-        continue
-
-      metric_value: float
-      if isinstance(value, list):
-        if not value:
-          logger.warning("Received empty list for metric %s", metric_name)
-          continue
-        try:
-          metric_value = statistics.mean(value)
-        except statistics.StatisticsError as e:
-          logger.warning(
-              "Failed to calculate mean for metric %s with value %s: %s",
-              metric_name,
-              value,
-              e,
-          )
-          continue
-      elif isinstance(value, (int, float)):
-        metric_value = float(value)
-      else:
-        logger.warning(
-            "Unsupported metric value type for %s: %s",
-            metric_name,
-            type(value),
-        )
-        continue
-
-      if is_master_host or record_on_all_hosts:
-        all_labels = labels.copy() if labels else {}
-        unit = metric_types.METRIC_UNITS.get(metric_name, "1")
-        all_labels.setdefault("unit", unit)
-        metrics_to_write.append({
-            "metric_name": metric_name,
-            "value": metric_value,
-            "step": step,
-            "labels": all_labels,
-        })
-
-      # Update the metric tracker
-      if metric_name in self._track_list:
-        if metric_name not in self._metric_tracker:
-          self._metric_tracker[metric_name] = {
-              "num_records": 1,
-              "avg": metric_value,
-          }
-        else:
-          num_records = self._metric_tracker[metric_name]["num_records"]
-          avg = self._metric_tracker[metric_name]["avg"]
-          avg = (avg * num_records + metric_value) / (num_records + 1)
-          self._metric_tracker[metric_name] = {
-              "num_records": num_records + 1,
-              "avg": avg,
-          }
-
-    if metrics_to_write:
       try:
-        ml_logging_client.write_metrics(
-            metrics=metrics_to_write,
-            run_id=current_mlrun.name,
-            location=current_mlrun.location,
-        )
-      except Exception as e:
-        raise exceptions.RecordingError(
-            "Error recording metrics batch: %s" % e
-        ) from e
+        self._queue.put_nowait({
+            "metric_info": metric_info,
+            "record_on_all_hosts": record_on_all_hosts,
+        })
+      except queue.Full:
+        dropped_count += 1
+
+    if dropped_count > 0:
+      logger.warning(
+          "Async metrics queue is full. Dropped %d metrics from batch.",
+          dropped_count,
+      )
+
+  def stop(self) -> None:
+    """Stop the background worker daemon."""
+    if self._stop_event.is_set():
+      return
+    self._stop_event.set()
+    self._queue.put(None)
+    self._worker_thread.join()
 
 
 class MetricsRecorderThread:
@@ -238,16 +349,16 @@ class MetricsRecorderThread:
 
   def __init__(
       self,
-      metric_collectors: List[
-          Tuple[
+      metric_collectors: Sequence[
+          tuple[
               str,
-              Callable[[], Union[int, float, List[float], None]],
-              Optional[dict[str, str]],
+              Callable[[], int | float | Sequence[float] | None],
+              Mapping[str, str] | None,
           ]
       ],
       interval_seconds: float,
   ):
-    """Initializes the metrics collector.
+    """Initialize the metrics collector.
 
     Args:
       metric_collectors: A list of tuples, where each tuple contains a metric
@@ -269,7 +380,7 @@ class MetricsRecorderThread:
     """
     self._metric_collectors = metric_collectors
     self._interval_seconds = interval_seconds
-    self._thread: Optional[threading.Thread] = None
+    self._thread: threading.Thread | None = None
     self._stop_event = threading.Event()
     self._is_master_host = host_utils.is_master_host()
 
@@ -308,7 +419,7 @@ class MetricsRecorderThread:
     return ml_run, control_plane_client_instance
 
   def start(self):
-    """Starts the background metric collection."""
+    """Start the background metric collection."""
     if self._thread is not None:
       logger.warning("Metrics collection thread is already running.")
       return
@@ -328,7 +439,7 @@ class MetricsRecorderThread:
     )
 
   def stop(self):
-    """Stops the background metric collection."""
+    """Stop the background metric collection."""
     if self._thread is None:
       return
 
@@ -342,7 +453,7 @@ class MetricsRecorderThread:
     )
 
   def _collect_loop(self):
-    """Continuously collects and records metrics until stop event is set."""
+    """Continuously collect and record metrics until stop event is set."""
     while not self._stop_event.is_set():
       try:
         self._collect_and_record()
@@ -354,7 +465,7 @@ class MetricsRecorderThread:
         self._stop_event.wait(self._interval_seconds)
 
   def _collect_and_record(self):
-    """Iterates through metric collectors, calls them, and records results."""
+    """Iterate through metric collectors, call them, and record results."""
     for metric_name, collect_func, labels in self._metric_collectors:
       try:
         value = collect_func()
@@ -370,7 +481,7 @@ class MetricsRecorderThread:
         )
 
   def _update_control_plane_time(self):
-    """Updates the time metric in control plane."""
+    """Update the time metric in control plane."""
     # Only update control plane time from the master host. This avoids
     # unnecessary client fetches and updates on worker hosts.
     if self._is_master_host:
