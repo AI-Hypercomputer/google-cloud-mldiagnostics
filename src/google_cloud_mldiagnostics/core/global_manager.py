@@ -61,9 +61,15 @@ class GlobalRunManager:
     Args:
         mlrun: The ML run to initialize.
     """
-    # Check and register ML host as Profiler Target, run this before acquiring
-    # the lock to avoid deadlock.
-    self.create_profiler_target()
+    if mlrun.environment != "prod":
+      logger.info(
+          "Non-prod environment %r detected. Profiler target creation will"
+          " be attempted.",
+          mlrun.environment,
+      )
+      # Check and register ML host as Profiler Target, run this before acquiring
+      # the lock to avoid deadlock.
+      self.create_profiler_target()
 
     with self._lock:
       if self._initialized:
@@ -131,13 +137,13 @@ class GlobalRunManager:
           )
         else:
           logger.info(
-              "ML run '%s' with status %s already exists, skipping creation.",
+              "ML run %r with status %s already exists, skipping creation.",
               mlrun.name,
               response.get("runPhase"),
           )
       except requests.exceptions.HTTPError as e:
         if e.response is not None and e.response.status_code == 404:
-          logger.info("ML run '%s' not found, creating a new one.", mlrun.name)
+          logger.info("ML run %r not found, creating a new one.", mlrun.name)
           # Prepare artifacts configuration if gcs_path is provided
           artifacts = None
           if mlrun.gcs_path:
@@ -181,7 +187,7 @@ class GlobalRunManager:
                 and e_create.response.status_code == 409
             ):
               logger.info(
-                  "ML run '%s' already exists, skipping creation.", mlrun.name
+                  "ML run %r already exists, skipping creation.", mlrun.name
               )
             else:
               logger.error("Failed to create ML run: %s", e_create)
@@ -191,10 +197,10 @@ class GlobalRunManager:
             raise
         else:
           # HTTPError with status other than 404, or no response
-          logger.error("Failed to get ML run '%s': %s", mlrun.name, e)
+          logger.error("Failed to get ML run %r: %s", mlrun.name, e)
           raise
       except Exception as e_get:
-        logger.error("Failed to get ML run '%s': %s", mlrun.name, e_get)
+        logger.error("Failed to get ML run %r: %s", mlrun.name, e_get)
         raise
 
       self._initialized = True
