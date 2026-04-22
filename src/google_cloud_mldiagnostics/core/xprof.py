@@ -79,13 +79,13 @@ class Xprof:
 
     if self._resolved_run is None:
       raise exceptions.ProfilingError(
-          "No MLRun found for profiling. Please provide a valid MLRun with"
-          " a GCS path, or initialize the global manager with a valid MLRun."
+          "No active ML run found for profiling. Please initialize an ML run"
+          " or provide a valid ML run with a configured GCS path."
       )
 
     if self._resolved_run.gcs_path is None:
       raise exceptions.ProfilingError(
-          "No GCS path found for profiling. Please provide a valid MLRun with"
+          "No GCS path found for profiling. Please provide a valid ML run with"
           " a GCS path."
       )
 
