@@ -36,6 +36,7 @@ class GlobalRunManager:
   _instance: Optional["GlobalRunManager"] = None
   _lock = threading.RLock()
   _PROFILER_TARGET_CREATION_TIMEOUT_SEC = 20
+  _PROFILER_SESSION_CREATION_TIMEOUT_SEC = 20
 
   def __new__(cls) -> "GlobalRunManager":
     """Ensure only one instance is created (thread-safe singleton)."""
@@ -53,6 +54,9 @@ class GlobalRunManager:
           ] = None
           cls._instance._timer_pt_creation: threading.Timer | None = None
           cls._instance._pt_creation_start_time: float | None = None
+          cls._instance._timer_ps_creation: threading.Timer | None = None
+          cls._instance._ps_creation_start_time: float | None = None
+          cls._instance._profiler_target: Optional[str] = None
     return cls._instance
 
   def initialize(self, mlrun: mlrun_types.MLRun) -> None:
@@ -259,16 +263,16 @@ class GlobalRunManager:
         self._pt_creation_start_time = time.time()
 
       if (
-          not self.is_initialized()
-          or self.run_id is None
+          not self._initialized
+          or self._ml_run is None
           or self._control_plane_client is None
       ):
         logger.warning(
             "Prerequisites not met. initialized: %r, run_id: %r,"
             " control_plane_client: %r, retrying profiler target creation after"
             " 0.2 seconds.",
-            self.is_initialized(),
-            self.run_id,
+            self._initialized,
+            self._ml_run.name if self._ml_run else None,
             self._control_plane_client,
         )
         self._start_profiler_target_creation_timer(0.2)
@@ -276,7 +280,7 @@ class GlobalRunManager:
 
       client = self._control_plane_client
       try:
-        client.get_ml_run(self.run_id)
+        client.get_ml_run(self._ml_run.name)
       except requests.exceptions.HTTPError as e_get:
         if e_get.response is not None and (
             e_get.response.status_code == 404
@@ -284,19 +288,19 @@ class GlobalRunManager:
         ):
           logger.info(
               "ML run %r not found, waiting for master node to create it.",
-              self.run_id,
+              self._ml_run.name,
           )
           self._start_profiler_target_creation_timer(0.5)
           return
 
-        logger.error("Failed to get ML run '%s': %s", self.run_id, e_get)
+        logger.error("Failed to get ML run '%s': %s", self._ml_run.name, e_get)
         raise
 
       try:
         host_name = host_utils.get_hostname()
         node_index = host_utils.get_process_index()
         client.create_profiler_target(
-            ml_run_name=self.run_id,
+            ml_run_name=self._ml_run.name,
             name=f"{host_name}-{node_index}",
             is_master=host_utils.is_master_host(),
             hostname=host_name,
@@ -304,12 +308,127 @@ class GlobalRunManager:
         )
         logger.info(
             "Successfully created profiler target for ML run: %s",
-            self.run_id,
+            self._ml_run.name,
+        )
+        # Save the profiler target resource name
+        parent = (
+            f"projects/{client.project_id}/locations/{client.location}/"
+            f"machineLearningRuns/{self._ml_run.name}"
+        )
+        self._profiler_target = (
+            f"{parent}/profilerTargets/{host_name}-{node_index}"
         )
         # Clear the start time after successful creation
         self._pt_creation_start_time = None
       except Exception as e_create:
         logger.error("Failed to create profiler target: %s", e_create)
+        raise
+
+  def _start_profiler_session_creation_timer(
+      self,
+      wait_time_sec: float,
+      session_id: str,
+      duration: str,
+      context_msg: str,
+  ) -> None:
+    """Starts a timer to retry profiler session creation."""
+    if (
+        self._ps_creation_start_time is not None
+        and time.time() - self._ps_creation_start_time
+        > self._PROFILER_SESSION_CREATION_TIMEOUT_SEC
+    ):
+      raise TimeoutError(
+          "Profiler session creation time exceeded wait time of"
+          f" {self._PROFILER_SESSION_CREATION_TIMEOUT_SEC} seconds."
+      )
+    logger.info(
+        "Starting profiler session creation timer with wait time: %s",
+        wait_time_sec,
+    )
+    self._timer_ps_creation = threading.Timer(
+        wait_time_sec,
+        self.create_profiler_session,
+        args=(session_id, duration, context_msg),
+    )
+    self._timer_ps_creation.start()
+
+  def create_profiler_session(
+      self, session_id: str, duration: str, context_msg: str
+  ) -> None:
+    """Create profiler session for the ML run.
+
+    Args:
+        session_id: The session ID to use for the profiling session.
+        duration: Requested duration of the profile (e.g., "10s").
+        context_msg: Context message for logging (e.g., "on stop").
+    """
+    with self._lock:
+      timer = self._timer_ps_creation
+      if timer is not None:
+        logger.info("Cancelling profiler session creation timer.")
+        timer.cancel()
+        self._timer_ps_creation = None
+
+      if self._ps_creation_start_time is None:
+        self._ps_creation_start_time = time.time()
+
+      if (
+          not self._initialized
+          or self._ml_run is None
+          or self._control_plane_client is None
+          or self._profiler_target is None
+      ):
+        logger.warning(
+            "Prerequisites not met for session creation. Retrying after 0.2"
+            " seconds."
+        )
+        self._start_profiler_session_creation_timer(
+            0.2, session_id, duration, context_msg
+        )
+        return
+
+      client = self._control_plane_client
+      try:
+        # TODO([INTERNAL]): Handle case of existing sessions and append to
+        # existing TARGET list.
+        resp = client.create_profiler_session(
+            ml_run_id=self._ml_run.name,
+            profiler_session_id=session_id,
+            profiler_targets=[self._profiler_target],
+            duration=duration,
+            kind="KIND_PROGRAMMATIC",
+            host_tracer_level="HOST_TRACER_LEVEL_INFO",
+            device_tracer_level="DEVICE_TRACER_LEVEL_ENABLED",
+            python_tracer_level="PYTHON_TRACER_LEVEL_DISABLED",
+        )
+        if resp == {"done": True}:
+          logger.info(
+              "Programmatic session lifecycle not enabled on server, session"
+              " not persisted."
+          )
+        else:
+          logger.info(
+              "Successfully reported profiler session to Control Plane %s.",
+              context_msg,
+          )
+        self._ps_creation_start_time = None
+      except requests.exceptions.HTTPError as e:
+        response = e.response
+        if response is not None and response.status_code == 404:
+          logger.warning(
+              "ML Run or Target not found, retrying profiler session"
+              " creation..."
+          )
+          self._start_profiler_session_creation_timer(
+              0.5, session_id, duration, context_msg
+          )
+          return
+
+        logger.exception("Failed to create profiler session")
+        raise
+      except Exception:
+        logger.exception("Unexpected error reporting profiler session")
+        self._ps_creation_start_time = None
         raise
 
   def has_active_run(self) -> bool:
@@ -350,6 +469,12 @@ class GlobalRunManager:
       if ml_run is None:
         return None
       return ml_run.name
+
+  @property
+  def profiler_target(self) -> Optional[str]:
+    """Get the current profiler target resource name."""
+    with self._lock:
+      return self._profiler_target
 
   @property
   def location(self) -> Optional[str]:

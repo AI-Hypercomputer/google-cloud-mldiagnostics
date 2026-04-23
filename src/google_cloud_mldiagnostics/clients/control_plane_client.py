@@ -284,6 +284,103 @@ class ControlPlaneClient:
       mlrun_name = target.split("/")[-1]
       return self.get_ml_run(mlrun_name)
 
+  def create_profiler_session(
+      self,
+      ml_run_id: str,
+      profiler_session_id: str,
+      profiler_targets: List[str],
+      duration: str,
+      kind: str,
+      host_tracer_level: Optional[str] = None,
+      device_tracer_level: Optional[str] = None,
+      python_tracer_level: Optional[str] = None,
+  ) -> Dict[str, Any]:
+    """Create a ProfilerSession resource.
+
+    Args:
+        ml_run_id: The ID of the ML run.
+        profiler_session_id: The ID for the profiler session.
+        profiler_targets: List of profiler targets. Required by Proto.
+        duration: Duration for the profiler session (e.g. "30s").
+        kind: Profiler session kind.
+        host_tracer_level: Optional host tracer level.
+        device_tracer_level: Optional device tracer level.
+        python_tracer_level: Optional python tracer level.
+
+    Returns:
+        The response JSON dictionary.
+
+    Raises:
+        requests.exceptions.RequestException: If the HTTP request fails.
+    """
+    parent = f"projects/{self.project_id}/locations/{self.location}/machineLearningRuns/{ml_run_id}"
+    url = f"{self.base_url}/{parent}/profilerSessions"
+
+    payload = {
+        "profilerTargets": profiler_targets,
+        "duration": duration,
+        "kind": kind,
+        "hostTracerLevel": host_tracer_level,
+        "deviceTracerLevel": device_tracer_level,
+        "pythonTracerLevel": python_tracer_level,
+    }
+
+    params = {"profiler_session_id": profiler_session_id}
+
+    if logger.isEnabledFor(logging.DEBUG):
+      logger.debug(
+          "Create Profiler Session request: url=%s, params=%s, json=%s",
+          url,
+          pprint.pformat(params),
+          pprint.pformat(payload),
+      )
+    with requests.post(
+        url,
+        headers=self._get_headers(),
+        params=params,
+        json=payload,
+    ) as response:
+      try:
+        response.raise_for_status()
+      except requests.exceptions.HTTPError as e:
+        if e.response is not None and e.response.status_code == 409:
+          logger.info(
+              "Profiler session '%s' already exists, skipping creation.",
+              profiler_session_id,
+          )
+          return {"name": f"{parent}/profilerSessions/{profiler_session_id}"}
+
+        logger.exception(
+            "Create Profiler Session request failed: status_code=%s,"
+            " content=%s",
+            response.status_code,
+            response.text,
+        )
+        raise
+
+      json_response = response.json()
+    logger.debug(
+        "Create Profiler Session response: %s", pprint.pformat(json_response)
+    )
+
+    operation = json_response
+    if not json_response.get("done"):
+      operation = self._wait_for_operation(json_response["name"])
+
+    logger.info(
+        "Create Profiler Session operation: %s", pprint.pformat(operation)
+    )
+
+    if operation.get("error"):
+      raise requests.exceptions.HTTPError(
+          f"Operation {operation['name']} failed: {operation['error']}"
+      )
+
+    if operation.get("response"):
+      return operation["response"]
+
+    return operation
+
   def get_ml_run(self, name: str) -> Dict[str, Any]:
     """Get an existing ML run using the Google Cloud API.
 
