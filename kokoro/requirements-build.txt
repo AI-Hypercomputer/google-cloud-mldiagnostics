@@ -1,0 +1,4 @@
+# Build-time dependencies
+build
+wheel
+setuptools
