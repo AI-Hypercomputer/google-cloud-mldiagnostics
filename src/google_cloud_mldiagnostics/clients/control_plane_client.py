@@ -27,6 +27,7 @@ import requests
 
 
 logger = logging.getLogger(__name__)
+_MAX_RETRIES = 3
 
 
 class ControlPlaneClient:
@@ -426,7 +427,7 @@ class ControlPlaneClient:
     """Update an existing ML run.
 
     This method updates the ML run by sending the full resource to the Google
-    Cloud API.
+    Cloud API. It retries on HTTP errors.
 
     Args:
         name: Name of the run to update
@@ -439,6 +440,34 @@ class ControlPlaneClient:
     Raises:
         requests.exceptions.RequestException: If the HTTP request fails
     """
+    for attempt in range(_MAX_RETRIES):
+      try:
+        return self._attempt_update_ml_run(name, force, run_phase)
+      except requests.exceptions.HTTPError as e:
+        logger.warning(
+            "Update for ML run '%s' (phase: %s) failed. "
+            "(Attempt %s/%s). Error: %s",
+            name,
+            run_phase,
+            attempt + 1,
+            _MAX_RETRIES,
+            e,
+        )
+        if attempt == _MAX_RETRIES - 1:
+          raise
+        time.sleep(0.2)
+
+    raise RuntimeError(
+        "update_ml_run failed to return a response or raise an error"
+    )
+
+  def _attempt_update_ml_run(
+      self,
+      name: str,
+      force: bool = False,
+      run_phase: Optional[str] = None,
+  ) -> Dict[str, Any]:
+    """Attempt to update an existing ML run once."""
     payload = self.get_ml_run(name)
     need_update = force
 
@@ -481,7 +510,22 @@ class ControlPlaneClient:
     json_response = response.json()
     if logger.isEnabledFor(logging.DEBUG):
       logger.debug("Update ML Run response: %s", pprint.pformat(json_response))
-    return json_response
+
+    # If it's a resource (no "done" field), return it directly
+    if "done" not in json_response:
+      return json_response
+
+    operation = (
+        self._wait_for_operation(json_response["name"])
+        if not json_response.get("done")
+        else json_response
+    )
+
+    if operation.get("error"):
+      err = operation["error"]
+      raise requests.exceptions.HTTPError(f"Operation failed: {err}")
+
+    return operation.get("response", operation)
 
   def create_profiler_target(
       self,
