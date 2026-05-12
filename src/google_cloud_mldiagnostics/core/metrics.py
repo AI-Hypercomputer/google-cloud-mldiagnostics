@@ -255,9 +255,7 @@ class _MetricsRecorder:
       logging_client_instance = logging_client.NoOpLoggingClient()
 
     if ml_run is None or logging_client_instance is None:
-      raise exceptions.NoActiveRunError(
-          "ML run or monitoring client is None despite active run check."
-      )
+      raise exceptions.NoActiveRunError("ML run is not fully initialized.")
 
     # Reset the tracker if the ml run name is changed
     if ml_run.name != self._ml_run_name:
@@ -412,8 +410,8 @@ class MetricsRecorderThread:
 
     control_plane_client_instance = manager.control_plane_client
     if self._is_master_host and control_plane_client_instance is None:
-      raise exceptions.NoActiveRunError(
-          "Control plane client is None on the master host."
+      raise exceptions.ControlPlaneClientNotInitializedError(
+          "Required services are not initialized on the master host."
       )
 
     return ml_run, control_plane_client_instance
@@ -487,8 +485,8 @@ class MetricsRecorderThread:
     if self._is_master_host:
       ml_run, control_plane_client_instance = self._get_active_run_and_client()
       if control_plane_client_instance is None:
-        raise exceptions.NoActiveRunError(
-            "Control plane client is None on the master host."
+        raise exceptions.ControlPlaneClientNotInitializedError(
+            "Required services are not initialized on the master host."
         )
       logger.info("Updating control plane time stamp.")
       control_plane_client_instance.update_ml_run(
