@@ -41,3 +41,9 @@ class ProfilingError(Exception):
   """Raised when profiling fails."""
 
   pass
+
+
+class ControlPlaneClientNotInitializedError(Exception):
+  """Raised when the control plane client is not initialized."""
+
+  pass

@@ -58,12 +58,13 @@ class RunPhaseMonitor:
     self._manager = global_manager.get_global_run_manager()
     if not self._manager.has_active_run():
       raise exceptions.NoActiveRunError(
-          "Internal error: Active ML run is notfound."
+          "No active ML run found. Please initialize an ML run before"
+          " monitoring."
       )
     self._control_plane_client = self._manager.control_plane_client
     if self._is_master_host and self._control_plane_client is None:
-      raise exceptions.NoActiveRunError(
-          "Internal error: Control plane client is None on the master host."
+      raise exceptions.ControlPlaneClientNotInitializedError(
+          "Required services are not initialized on the master host."
       )
 
   def _handle_unhandled_exception(self, exc_type, exc_val, exc_tb):
