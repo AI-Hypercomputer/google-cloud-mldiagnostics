@@ -24,6 +24,7 @@ import socket
 from typing import Any
 
 from google_cloud_mldiagnostics.utils.jax_utils import jax_host
+import requests
 
 
 logger = logging.getLogger(__name__)
@@ -185,6 +186,24 @@ def _gke_run_identifier(workload_details: dict[str, Any]) -> str:
 def get_hostname() -> str:
   """Returns hostname of the current machine."""
   return socket.gethostname()
+
+
+def get_instance_id() -> str:
+  """Returns the VM instance ID if available, otherwise raises RuntimeError."""
+  headers = {"Metadata-Flavor": "Google"}
+  with requests.get(
+      "http://metadata.google.internal/computeMetadata/v1/instance/id",
+      headers=headers,
+      timeout=2.0,
+  ) as response:
+    if response.status_code != 200:
+      raise RuntimeError(
+          f"Failed to fetch instance ID. Status code: {response.status_code}"
+      )
+    instance_id = response.text.strip()
+    if not instance_id:
+      raise RuntimeError("Metadata server returned an empty instance ID")
+    return instance_id
 
 
 def get_process_index() -> int:

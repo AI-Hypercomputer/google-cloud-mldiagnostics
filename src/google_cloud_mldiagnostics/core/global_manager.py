@@ -297,13 +297,13 @@ class GlobalRunManager:
         raise
 
       try:
-        host_name = host_utils.get_hostname()
+        instance_id = host_utils.get_instance_id()
         node_index = host_utils.get_process_index()
         client.create_profiler_target(
             ml_run_name=self._ml_run.name,
-            name=f"{host_name}-{node_index}",
+            name=instance_id,
             is_master=host_utils.is_master_host(),
-            hostname=host_name,
+            hostname=instance_id,
             node_index=node_index,
         )
         logger.info(
@@ -315,14 +315,12 @@ class GlobalRunManager:
             f"projects/{client.project_id}/locations/{client.location}/"
             f"machineLearningRuns/{self._ml_run.name}"
         )
-        self._profiler_target = (
-            f"{parent}/profilerTargets/{host_name}-{node_index}"
-        )
+        self._profiler_target = f"{parent}/profilerTargets/{instance_id}"
         # Clear the start time after successful creation
         self._pt_creation_start_time = None
-      except Exception as e_create:
-        logger.error("Failed to create profiler target: %s", e_create)
-        raise
+      except Exception:
+        logger.exception("Failed to create profiler target.")
+        raise RuntimeError("Failed to create profiler target.") from None
 
   def _start_profiler_session_creation_timer(
       self,
