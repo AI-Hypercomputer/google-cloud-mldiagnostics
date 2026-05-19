@@ -18,6 +18,8 @@ import dataclasses
 import enum
 from typing import Any
 
+from google_cloud_mldiagnostics.utils import gcp
+
 
 class RunPhase(enum.Enum):
   """Enumeration of possible run phases for machine learning runs."""
@@ -95,3 +97,6 @@ class MLRun:
   display_name: str = ""
   on_demand_xprof: bool = False
   environment: str = ""
+
+  def __post_init__(self) -> None:
+    gcp.validate_region(self.location)

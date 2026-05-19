@@ -76,6 +76,7 @@ def initialize_mlrun(
 
   if region is None:
     region = gcp.get_instance_region()
+  gcp.validate_region(region)
   if project is None:
     project = gcp.get_project_id()
 

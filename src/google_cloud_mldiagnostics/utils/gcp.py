@@ -15,6 +15,8 @@
 """Utility functions for GCP related operations."""
 
 import logging
+import re
+import textwrap
 import urllib.error
 import urllib.request
 
@@ -84,3 +86,51 @@ def get_instance_region(timeout: int = 5) -> str | None:
     if len(parts) >= 3:
       return "-".join(parts[:-1])
   return None
+
+
+_REGION_REGEX = re.compile(
+    textwrap.dedent("""\
+        [a-z]+          # Prefix (e.g., 'us', 'europe')
+        (-[a-z]+)*      # Optional middle parts (e.g., '-central', '-gov-west')
+        -[a-z]+         # Name part (e.g., '-west', '-east')
+        [0-9]+          # Number part (e.g., '1', '3')
+    """),
+    re.VERBOSE,
+)
+_ZONE_REGEX = re.compile(
+    textwrap.dedent("""\
+        [a-z]+          # Prefix
+        (-[a-z]+)*      # Optional middle parts
+        -[a-z]+         # Name part
+        [0-9]+          # Number part (e.g., '1')
+        -[a-z]+         # Zone suffix (e.g., '-a', '-b')
+    """),
+    re.VERBOSE,
+)
+
+
+def validate_region(region: str | None) -> None:
+  """Validates that the given string is a valid region and not a zone.
+
+  Args:
+      region: The region string to validate.
+
+  Raises:
+      ValueError: If the region is invalid or is a zone.
+  """
+  if region is None:
+    raise ValueError("Region value is required.")
+
+  if _REGION_REGEX.fullmatch(region):
+    return
+
+  if _ZONE_REGEX.fullmatch(region):
+    raise ValueError(
+        f"Invalid region {region!r}. Expected a region format like"
+        " 'us-central1', but received a zone. Please provide a valid region."
+    )
+
+  raise ValueError(
+      f"Invalid region {region!r}. Expected a region format like"
+      " 'us-central1'. Please provide a valid region."
+  )

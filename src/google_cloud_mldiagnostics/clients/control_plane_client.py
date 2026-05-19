@@ -22,6 +22,7 @@ from typing import Any, Dict, List, Optional
 
 import google.auth
 from google.auth.transport import requests as google_auth_requests
+from google_cloud_mldiagnostics.utils import gcp
 from google_cloud_mldiagnostics.utils import host_utils
 import requests
 
@@ -46,6 +47,7 @@ class ControlPlaneClient:
         environment: Environment to use (autopush, staging, prod)
         location: Google Cloud location/region
     """
+    gcp.validate_region(location)
     if environment == "prod":
       base_url = "https://hypercomputecluster.googleapis.com/v1alpha"
     else:
