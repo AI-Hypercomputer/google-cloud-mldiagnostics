@@ -14,6 +14,7 @@
 
 """Client for sending requests to Diagon Control Plane."""
 
+import ast
 import logging
 import pprint
 import random
@@ -29,6 +30,36 @@ import requests
 
 logger = logging.getLogger(__name__)
 _MAX_RETRIES = 3
+_ERROR_CODE_ALREADY_EXISTS = 6
+
+
+def _extract_run_id_from_error(err: Exception) -> Optional[str]:
+  """Extract the existing run ID from HTTPError.
+
+  This function parses the string representation of an HTTPError to find a
+  previously created run ID when a resource already exists error (code 6) is
+  returned by the API.
+
+  Args:
+    err: The exception raised, typically a requests.exceptions.HTTPError.
+
+  Returns:
+    The extracted run ID as a string if found, otherwise None.
+  """
+  try:
+    err_str = str(err)
+    if "failed: {" in err_str:
+      dict_str = err_str.split("failed: ", 1)[1]
+      err_dict = ast.literal_eval(dict_str)
+      if err_dict.get("code") == _ERROR_CODE_ALREADY_EXISTS:
+        for detail in err_dict.get("details", []):
+          if detail.get("@type") == "type.googleapis.com/google.rpc.ResourceInfo":
+            resource_name = detail.get("resourceName")
+            if resource_name:
+              return resource_name.split("/")[-1]
+  except Exception as e:
+    logger.debug("Failed to extract run ID from error string: %s", e)
+  return None
 
 
 class ControlPlaneClient:
@@ -261,7 +292,20 @@ class ControlPlaneClient:
       logger.debug("Create ML Run response: %s", pprint.pformat(json_response))
 
     if not json_response.get("done"):
-      operation = self._wait_for_operation(json_response["name"])
+      try:
+        operation = self._wait_for_operation(json_response["name"])
+      except requests.exceptions.HTTPError as e_op:
+        existing_run_id = _extract_run_id_from_error(e_op)
+        if existing_run_id:
+          logger.info("ML run already exists. Recovering run ID %r.", existing_run_id)
+          return self.update_ml_run(
+              name=existing_run_id,
+              display_name=display_name,
+              tools=tools,
+              artifacts=artifacts,
+              run_phase=run_phase,
+          )
+        raise
     else:
       operation = json_response
 
@@ -425,6 +469,10 @@ class ControlPlaneClient:
       name: str,
       force: bool = False,
       run_phase: Optional[str] = None,
+      *,
+      display_name: Optional[str] = None,
+      tools: Optional[List[Dict[str, Any]]] = None,
+      artifacts: Optional[Dict[str, str]] = None,
   ) -> Dict[str, Any]:
     """Update an existing ML run.
 
@@ -435,6 +483,9 @@ class ControlPlaneClient:
         name: Name of the run to update
         force: If True, forces an update even if no fields have changed.
         run_phase: Phase of the run (ACTIVE, COMPLETE, FAILED)
+        display_name: Optional new display name for the run
+        tools: Optional new list of tools to enable (e.g., XProf, NSys)
+        artifacts: Optional new artifacts configuration (e.g., gcsPath)
 
     Returns:
         Response from the API as a dictionary
@@ -444,7 +495,14 @@ class ControlPlaneClient:
     """
     for attempt in range(_MAX_RETRIES):
       try:
-        return self._attempt_update_ml_run(name, force, run_phase)
+        return self._attempt_update_ml_run(
+            name,
+            force,
+            run_phase,
+            display_name=display_name,
+            tools=tools,
+            artifacts=artifacts,
+        )
       except requests.exceptions.HTTPError as e:
         logger.warning(
             "Update for ML run '%s' (phase: %s) failed. "
@@ -468,13 +526,31 @@ class ControlPlaneClient:
       name: str,
       force: bool = False,
       run_phase: Optional[str] = None,
+      *,
+      display_name: Optional[str] = None,
+      tools: Optional[List[Dict[str, Any]]] = None,
+      artifacts: Optional[Dict[str, str]] = None,
   ) -> Dict[str, Any]:
     """Attempt to update an existing ML run once."""
     payload = self.get_ml_run(name)
     need_update = force
 
+    if display_name is not None and payload.get("displayName") != display_name:
+      payload["displayName"] = display_name
+      need_update = True
+
     if run_phase is not None and payload.get("runPhase") != run_phase:
       payload["runPhase"] = run_phase
+      need_update = True
+
+    if tools is not None:
+      existing_tools = payload.get("tools", [])
+      if {"xprof": {}} in tools and {"xprof": {}} not in existing_tools:
+        payload["tools"] = existing_tools + [{"xprof": {}}]
+        need_update = True
+
+    if artifacts is not None and payload.get("artifacts") != artifacts:
+      payload["artifacts"] = artifacts
       need_update = True
 
     if not need_update:

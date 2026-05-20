@@ -182,8 +182,10 @@ class GlobalRunManager:
             )
             logger.info(
                 "Successfully created ML run: %s",
-                response.get("name", "unknown"),
+                response.get("name") if response else "unknown",
             )
+            if response and "name" in response:
+              self._ml_run.name = response.get("name", "unknown").split("/")[-1]
 
           except requests.exceptions.HTTPError as e_create:
             if (
