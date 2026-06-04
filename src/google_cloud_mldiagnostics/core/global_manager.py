@@ -22,6 +22,7 @@ from typing import Optional
 from google_cloud_mldiagnostics import _version
 from google_cloud_mldiagnostics.clients import control_plane_client
 from google_cloud_mldiagnostics.clients import logging_client
+from google_cloud_mldiagnostics.custom_types import metric_types
 from google_cloud_mldiagnostics.custom_types import mlrun_types
 from google_cloud_mldiagnostics.utils import host_utils
 import requests
@@ -38,8 +39,9 @@ class GlobalRunManager:
   _PROFILER_TARGET_CREATION_TIMEOUT_SEC = 20
   _PROFILER_SESSION_CREATION_TIMEOUT_SEC = 20
 
-  def __new__(cls) -> "GlobalRunManager":
+  def __new__(cls, *args, **kwargs) -> "GlobalRunManager":
     """Ensure only one instance is created (thread-safe singleton)."""
+    del args, kwargs
     if cls._instance is None:
       with cls._lock:
         if cls._instance is None:
@@ -58,6 +60,24 @@ class GlobalRunManager:
           cls._instance._ps_creation_start_time: float | None = None
           cls._instance._profiler_target: Optional[str] = None
     return cls._instance
+
+  def __init__(
+      self, accelerator_type: metric_types.AcceleratorType | None = None
+  ):
+    """Initialize the instance.
+
+    Args:
+        accelerator_type: An optional accelerator type enum. If not provided,
+            it will default to retrieving it from host_utils.
+    """
+    if (
+        not hasattr(self, "_initialized_constructor")
+        or accelerator_type is not None
+    ):
+      self._initialized_constructor = True
+      self._accelerator_type = (
+          accelerator_type or host_utils.get_accelerator_type()
+      )
 
   def initialize(self, mlrun: mlrun_types.MLRun) -> None:
     """Initialize or update the singleton with new run information.
@@ -176,6 +196,7 @@ class GlobalRunManager:
                     "on_demand_xprof": (
                         "enabled" if mlrun.on_demand_xprof else "disabled"
                     ),
+                    "accelerator_type": self._accelerator_type.value,
                 },
                 orchestrator=mlrun.orchestrator,
                 workload_details=mlrun.workload_details,

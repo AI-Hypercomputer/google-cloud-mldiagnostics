@@ -23,6 +23,7 @@ import re
 import socket
 from typing import Any
 
+from google_cloud_mldiagnostics.custom_types import metric_types
 from google_cloud_mldiagnostics.utils.jax_utils import jax_host
 import requests
 
@@ -210,6 +211,11 @@ def get_process_index() -> int:
   """Returns host index."""
   # TODO: [INTERNAL] - Add support for non-jax workloads.
   return jax_host.get_jax_process_index()
+
+
+def get_accelerator_type() -> metric_types.AcceleratorType:
+  """Returns the accelerator type of the current host."""
+  return jax_host.get_accelerator_type()
 
 
 def is_master_host() -> bool:

@@ -65,5 +65,16 @@ METRIC_UNITS = {
 
 
 class AcceleratorType(enum.Enum):
-  """Accelerator types."""
+  """An accelerator type.
+
+  Attributes:
+    TPU: Tensor Processing Unit.
+    GPU: Graphics Processing Unit.
+    CPU: Central Processing Unit.
+    UNKNOWN: Unknown or unspecified accelerator type.
+  """
+
   TPU = "tpu"
+  GPU = "gpu"
+  CPU = "cpu"
+  UNKNOWN = "unknown"
