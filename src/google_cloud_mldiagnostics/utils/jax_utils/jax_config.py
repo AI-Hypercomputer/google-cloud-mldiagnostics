@@ -14,6 +14,7 @@
 
 """Utility functions for configurations in JAX framework."""
 
+from google_cloud_mldiagnostics.custom_types import metric_types
 import jax
 
 
@@ -35,12 +36,12 @@ class JaxHardwareConfig:
 
   @property
   def _device_type(self) -> str:
-    """Returns the device type used for ML workload."""
+    """The device type used for ML workload."""
     return self._devices[0].device_kind
 
   @property
   def _num_slices(self) -> int:
-    """Returns the number of TPU slices for ML workload."""
+    """The number of TPU slices for ML workload."""
     if self._is_multi_slice_tpu:
       slice_indices = set()
       for device in self._devices:
@@ -51,8 +52,18 @@ class JaxHardwareConfig:
 
   @property
   def _devices_per_slice(self) -> int:
-    """Returns the number of devices per TPU slice for ML workload."""
+    """The number of devices per TPU slice for ML workload."""
     return jax.device_count() // self._num_slices
+
+  @property
+  def accelerator_type(self) -> str:
+    """The accelerator type (tpu, gpu, or cpu)."""
+    platform = getattr(self._devices[0], 'platform', 'tpu').lower()
+    if platform == 'gpu':
+      return metric_types.AcceleratorType.GPU.value
+    if platform == 'cpu':
+      return metric_types.AcceleratorType.CPU.value
+    return metric_types.AcceleratorType.TPU.value
 
   def get_config(self) -> dict[str, str]:
     """Returns the default configuration for JAX framework."""
@@ -60,4 +71,6 @@ class JaxHardwareConfig:
         'device_type': self._device_type,
         'num_slices': str(self._num_slices),
         'devices_per_slice': str(self._devices_per_slice),
+        'accelerator_type': self.accelerator_type,
     }
+

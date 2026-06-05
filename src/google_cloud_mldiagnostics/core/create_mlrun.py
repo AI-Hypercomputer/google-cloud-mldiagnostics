@@ -14,6 +14,7 @@
 
 """Module for registering and managing ML runs."""
 
+from collections.abc import Mapping
 import datetime
 import logging
 import threading
@@ -30,9 +31,26 @@ from google_cloud_mldiagnostics.utils import host_utils
 from google_cloud_mldiagnostics.utils import metric_utils
 from google_cloud_mldiagnostics.utils import orchestrator_utils
 from google_cloud_mldiagnostics.utils import run_phase_utils
+from google_cloud_mldiagnostics.utils.gpu_utils import gpu_metric
 
 _METRICS_RECORDER_THREAD_LOCK = threading.Lock()
 _METRICS_RECORDER_THREAD_STARTED = False
+
+
+def _create_metric_collector(
+    metric_name: str,
+    collect_func: Any,
+    accelerator_type: str | None = None,
+) -> tuple[str, Any, dict[str, str]]:
+  """Creates a metric collector tuple with standardized labels."""
+  labels = {
+      "hostname": host_utils.get_hostname(),
+      "process_index": str(host_utils.get_process_index()),
+      "unit": "%",
+  }
+  if accelerator_type is not None:
+    labels["accelerator_type"] = accelerator_type
+  return (metric_name, collect_func, labels)
 
 
 def initialize_mlrun(
@@ -40,7 +58,7 @@ def initialize_mlrun(
     environment: str,
     on_demand_xprof: bool,
     run_group: str | None = None,
-    configs: dict[str, Any] | None = None,
+    configs: Mapping[str, Any] | None = None,
     gcs_path: str | None = None,
     project: str | None = None,
     region: str | None = None,
@@ -161,63 +179,61 @@ def initialize_mlrun(
       if not _METRICS_RECORDER_THREAD_STARTED:
         # Avoid starting the metrics recorder thread repeatedly if the run is
         # already initialized.
+        accelerator_type = config_utils.get_accelerator_type()
+        if accelerator_type == metric_types.AcceleratorType.GPU.value:
+          metric_collectors = [
+              _create_metric_collector(
+                  metric_types.MetricType.GPU_UTILIZATION.value,
+                  gpu_metric.get_gpu_utilization,
+                  metric_types.AcceleratorType.GPU.value,
+              ),
+              _create_metric_collector(
+                  metric_types.MetricType.GPU_TENSORCORE_UTILIZATION.value,
+                  gpu_metric.get_gpu_tensorcore_utilization,
+                  metric_types.AcceleratorType.GPU.value,
+              ),
+              _create_metric_collector(
+                  metric_types.MetricType.VRAM_UTILIZATION.value,
+                  gpu_metric.get_vram_utilization,
+                  metric_types.AcceleratorType.GPU.value,
+              ),
+              _create_metric_collector(
+                  metric_types.MetricType.HOST_CPU_UTILIZATION.value,
+                  metric_utils.get_host_cpu_utilization,
+              ),
+              _create_metric_collector(
+                  metric_types.MetricType.HOST_MEMORY_UTILIZATION.value,
+                  metric_utils.get_host_memory_utilization,
+              ),
+          ]
+        else:
+          metric_collectors = [
+              _create_metric_collector(
+                  metric_types.MetricType.TPU_DUTY_CYCLE.value,
+                  metric_utils.get_tpu_duty_cycle,
+                  metric_types.AcceleratorType.TPU.value,
+              ),
+              _create_metric_collector(
+                  metric_types.MetricType.TPU_TENSORCORE_UTILIZATION.value,
+                  metric_utils.get_tpu_tensorcore_utilization,
+                  metric_types.AcceleratorType.TPU.value,
+              ),
+              _create_metric_collector(
+                  metric_types.MetricType.HBM_UTILIZATION.value,
+                  metric_utils.get_hbm_utilization,
+                  metric_types.AcceleratorType.TPU.value,
+              ),
+              _create_metric_collector(
+                  metric_types.MetricType.HOST_CPU_UTILIZATION.value,
+                  metric_utils.get_host_cpu_utilization,
+              ),
+              _create_metric_collector(
+                  metric_types.MetricType.HOST_MEMORY_UTILIZATION.value,
+                  metric_utils.get_host_memory_utilization,
+              ),
+          ]
         default_metrics_recorder = metrics.MetricsRecorderThread(
-            metric_collectors=[
-                (
-                    metric_types.MetricType.TPU_DUTY_CYCLE.value,
-                    metric_utils.get_tpu_duty_cycle,
-                    {
-                        "hostname": host_utils.get_hostname(),
-                        "process_index": str(host_utils.get_process_index()),
-                        "unit": "%",
-                        "accelerator_type": (
-                            metric_types.AcceleratorType.TPU.value
-                        ),
-                    },
-                ),
-                (
-                    metric_types.MetricType.TPU_TENSORCORE_UTILIZATION.value,
-                    metric_utils.get_tpu_tensorcore_utilization,
-                    {
-                        "hostname": host_utils.get_hostname(),
-                        "process_index": str(host_utils.get_process_index()),
-                        "unit": "%",
-                        "accelerator_type": (
-                            metric_types.AcceleratorType.TPU.value
-                        ),
-                    },
-                ),
-                (
-                    metric_types.MetricType.HBM_UTILIZATION.value,
-                    metric_utils.get_hbm_utilization,
-                    {
-                        "hostname": host_utils.get_hostname(),
-                        "process_index": str(host_utils.get_process_index()),
-                        "unit": "%",
-                        "accelerator_type": (
-                            metric_types.AcceleratorType.TPU.value
-                        ),
-                    },
-                ),
-                (
-                    metric_types.MetricType.HOST_CPU_UTILIZATION.value,
-                    metric_utils.get_host_cpu_utilization,
-                    {
-                        "hostname": host_utils.get_hostname(),
-                        "process_index": str(host_utils.get_process_index()),
-                        "unit": "%",
-                    },
-                ),
-                (
-                    metric_types.MetricType.HOST_MEMORY_UTILIZATION.value,
-                    metric_utils.get_host_memory_utilization,
-                    {
-                        "hostname": host_utils.get_hostname(),
-                        "process_index": str(host_utils.get_process_index()),
-                        "unit": "%",
-                    },
-                ),
-            ],
+            metric_collectors=metric_collectors,
             interval_seconds=metrics_record_interval_sec,
         )
         default_metrics_recorder.start()

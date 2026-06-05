@@ -49,13 +49,15 @@ class _MetricsRecorder:
         metric_types.MetricType.LATENCY.value,
         metric_types.MetricType.HBM_UTILIZATION.value,
         metric_types.MetricType.TPU_TENSORCORE_UTILIZATION.value,
+        metric_types.MetricType.VRAM_UTILIZATION.value,
+        metric_types.MetricType.GPU_TENSORCORE_UTILIZATION.value,
     )
     self._metric_tracker: dict[str, dict[str, Any]] = collections.defaultdict(
         lambda: {"num_records": 0, "avg": 0.0}
     )
-    self._ml_run_name = None
+    self._ml_run_name: str | None = None
     self._lock = threading.Lock()
-    self._is_master_host = None
+    self._is_master_host: bool | None = None
 
     # Async metrics queue
     self._queue = queue.Queue(maxsize=10_000)
@@ -174,7 +176,7 @@ class _MetricsRecorder:
             self._is_master_host = host_utils.is_master_host()
           is_master_host = self._is_master_host
         except exceptions.NoActiveRunError:
-          # If no active run yet, sleep briefly and retry with current raw_items on next loop
+          # If no active run yet, sleep briefly and retry on next loop.
           self._stop_event.wait(0.5)
           if self._stop_event.is_set():
             for _ in raw_items:
@@ -202,7 +204,7 @@ class _MetricsRecorder:
                     run_id=ml_run.name,
                     location=ml_run.location,
                 )
-              except Exception:
+              except Exception:  # pylint: disable=broad-exception-caught
                 logger.exception(
                     "Error publishing async metrics batch: %s", metrics_to_write
                 )
@@ -214,7 +216,7 @@ class _MetricsRecorder:
           if should_stop:
             break
 
-      except Exception:
+      except Exception:  # pylint: disable=broad-exception-caught
         logger.exception(
             "Unhandled exception in metrics worker daemon, raw_items: %s",
             raw_items,
@@ -269,7 +271,7 @@ class _MetricsRecorder:
       metric_name: str,
       value: int | float | Sequence[float] | None,
       step: int | None = None,
-      labels: dict[str, str] | None = None,
+      labels: Mapping[str, str] | None = None,
       record_on_all_hosts: bool = False,
   ) -> None:
     """Record a single metric value, averaging lists if provided.
@@ -280,8 +282,8 @@ class _MetricsRecorder:
       step: Optional step number (no step label nor step metric if not
         provided). Note that step metric will be recorded as a separate
         metric, the later step metric will overwrite the previous one and step
-        information is the same as previous one
-      labels: additional labels.
+        information is the same as previous one.
+      labels: Additional labels.
       record_on_all_hosts: Whether to record metrics on all hosts.
     """
     if value is None:

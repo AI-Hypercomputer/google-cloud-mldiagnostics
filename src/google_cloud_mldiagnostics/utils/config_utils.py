@@ -14,10 +14,12 @@
 
 """Utility functions for configurations."""
 
+from collections.abc import Mapping
 import logging
 import os
 from typing import Any
 
+from google_cloud_mldiagnostics.custom_types import metric_types
 from google_cloud_mldiagnostics.utils.jax_utils import jax_config
 from google_cloud_mldiagnostics.utils.libtpu_utils import libtpu_metric
 
@@ -95,6 +97,7 @@ def get_hardware_config() -> dict[str, str]:
       "device_type",
       "num_slices",
       "devices_per_slice",
+      "accelerator_type",
   ]
   for key in framework_required_keys:
     if key not in framework_specific_config:
@@ -104,7 +107,15 @@ def get_hardware_config() -> dict[str, str]:
   return hardware_config
 
 
+def get_accelerator_type() -> str:
+  """Returns the accelerator type (tpu or gpu) for ML workload."""
+  config_instance = _get_framework_config_instance()
+  if config_instance and hasattr(config_instance, "accelerator_type"):
+    return config_instance.accelerator_type
+  return metric_types.AcceleratorType.TPU.value
+
+
 # Common functions.
-def sanitize_config(config: dict[str, Any]) -> dict[str, str]:
+def sanitize_config(config: Mapping[str, Any]) -> dict[str, str]:
   """Converts all values in a dictionary to strings."""
   return {str(k): str(v) for k, v in config.items()}
