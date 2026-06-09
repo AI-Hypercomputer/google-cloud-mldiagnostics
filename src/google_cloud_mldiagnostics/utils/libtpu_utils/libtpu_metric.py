@@ -16,6 +16,8 @@
 
 from importlib import metadata
 import logging
+import os
+import sys
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +33,12 @@ def _initialize():
     return
 
   _initialized = True
+
+  old_flags = sys.getdlopenflags()
   try:
+    sys.setdlopenflags(
+        old_flags | os.RTLD_LOCAL | getattr(os, "RTLD_DEEPBIND", 0)
+    )
     # pylint: disable=g-import-not-at-top
     from libtpu import sdk as libtpu_sdk_imported  # pytype: disable=import-error
 
@@ -42,13 +49,14 @@ def _initialize():
       _monitoring_module = libtpu_sdk.monitoring
     else:
       _monitoring_module = None
-  except ImportError:
+  except Exception as e:  # pylint: disable=broad-exception-caught
     libtpu_sdk = None
     _monitoring_module = None
     logger.warning(
-        "LibTPU metrics are not available. Please make sure libtpu is"
-        " installed."
+        "LibTPU metrics are not available or failed to initialize: %s", e
     )
+  finally:
+    sys.setdlopenflags(old_flags)
 
 
 def get_libtpu_version() -> str:
