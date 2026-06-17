@@ -74,8 +74,9 @@ build_and_copy_artifacts() {
     python -m pip install -r kokoro/requirements-build.txt
 
     # Run the build tool to generate distribution packages (wheel and tarball).
+    # Pass --no-isolation to prevent it from fetching dependencies from PyPI.
     echo "Building the package..."
-    python -m build
+    python -m build --no-isolation
 
     # Copy artifacts to Kokoro artifacts directory
     # Verify that the build actually produced files before copying.
