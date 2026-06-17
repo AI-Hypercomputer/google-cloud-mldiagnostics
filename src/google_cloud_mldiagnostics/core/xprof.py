@@ -25,7 +25,6 @@ from google_cloud_mldiagnostics.custom_types import mlrun_types
 from google_cloud_mldiagnostics.utils import host_utils
 import jax
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -114,21 +113,18 @@ class Xprof:
     """Reports the profiler session to the Control Plane."""
     if self._resolved_run and self._resolved_run.environment == "prod":
       return
-    if host_utils.is_master_host():
-      duration_str = None
-      if self._start_time is not None:
-        duration_sec = time.time() - self._start_time
-        duration_str = f"{max(0.001, duration_sec):.3f}s"
 
-      logger.info(
-          "Scheduling profiler session report in background for %r",
-          self._current_session_id,
-      )
-      global_manager.GlobalRunManager.get_instance().create_profiler_session(
-          session_id=self._current_session_id,
-          duration=duration_str,
-          context_msg=context_msg,
-      )
+    logger.info(
+        "Scheduling profiler session report in background for %r",
+        self._current_session_id,
+    )
+    global_manager.GlobalRunManager.get_instance().create_profiler_session(
+        session_id=self._current_session_id,
+        start_time=self._start_time,
+        end_time=time.time(),
+        session_phase="SUCCEEDED",
+        context_msg=context_msg,
+    )
 
   def start(self, session_id: str | None = None) -> None:
     """Starts the JAX profiler.

@@ -15,6 +15,7 @@
 """Client for sending requests to Diagon Control Plane."""
 
 import ast
+import datetime
 import logging
 import pprint
 import random
@@ -26,7 +27,6 @@ from google.auth.transport import requests as google_auth_requests
 from google_cloud_mldiagnostics.utils import gcp
 from google_cloud_mldiagnostics.utils import host_utils
 import requests
-
 
 logger = logging.getLogger(__name__)
 _MAX_RETRIES = 3
@@ -53,7 +53,10 @@ def _extract_run_id_from_error(err: Exception) -> Optional[str]:
       err_dict = ast.literal_eval(dict_str)
       if err_dict.get("code") == _ERROR_CODE_ALREADY_EXISTS:
         for detail in err_dict.get("details", []):
-          if detail.get("@type") == "type.googleapis.com/google.rpc.ResourceInfo":
+          if (
+              detail.get("@type")
+              == "type.googleapis.com/google.rpc.ResourceInfo"
+          ):
             resource_name = detail.get("resourceName")
             if resource_name:
               return resource_name.split("/")[-1]
@@ -297,7 +300,9 @@ class ControlPlaneClient:
       except requests.exceptions.HTTPError as e_op:
         existing_run_id = _extract_run_id_from_error(e_op)
         if existing_run_id:
-          logger.info("ML run already exists. Recovering run ID %r.", existing_run_id)
+          logger.info(
+              "ML run already exists. Recovering run ID %r.", existing_run_id
+          )
           return self.update_ml_run(
               name=existing_run_id,
               display_name=display_name,
@@ -335,24 +340,22 @@ class ControlPlaneClient:
       self,
       ml_run_id: str,
       profiler_session_id: str,
-      profiler_targets: List[str],
-      duration: str,
-      kind: str,
-      host_tracer_level: Optional[str] = None,
-      device_tracer_level: Optional[str] = None,
-      python_tracer_level: Optional[str] = None,
+      gsc_file_path: str,
+      profiler_target: str,
+      start_time: float,
+      end_time: float,
+      session_phase: str,
   ) -> Dict[str, Any]:
     """Create a ProfilerSession resource.
 
     Args:
         ml_run_id: The ID of the ML run.
         profiler_session_id: The ID for the profiler session.
-        profiler_targets: List of profiler targets. Required by Proto.
-        duration: Duration for the profiler session (e.g. "30s").
-        kind: Profiler session kind.
-        host_tracer_level: Optional host tracer level.
-        device_tracer_level: Optional device tracer level.
-        python_tracer_level: Optional python tracer level.
+        gsc_file_path: The GCS path for storing profiler session data.
+        profiler_target: The profiler target resource name.
+        start_time: Start time of the profiler session.
+        end_time: End time of the profiler session.
+        session_phase: The phase of the session (e.g., "SUCCEEDED").
 
     Returns:
         The response JSON dictionary.
@@ -363,13 +366,32 @@ class ControlPlaneClient:
     parent = f"projects/{self.project_id}/locations/{self.location}/machineLearningRuns/{ml_run_id}"
     url = f"{self.base_url}/{parent}/profilerSessions"
 
+    duration_sec = end_time - start_time
+    duration_str = f"{max(0.001, duration_sec):.3f}s"
+
+    start_time_str = datetime.datetime.fromtimestamp(
+        start_time, datetime.timezone.utc
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    end_time_str = datetime.datetime.fromtimestamp(
+        end_time, datetime.timezone.utc
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+
     payload = {
-        "profilerTargets": profiler_targets,
-        "duration": duration,
-        "kind": kind,
-        "hostTracerLevel": host_tracer_level,
-        "deviceTracerLevel": device_tracer_level,
-        "pythonTracerLevel": python_tracer_level,
+        "profilerTargets": [profiler_target],
+        "targetSessions": {
+            profiler_target: {
+                "startTime": start_time_str,
+                "endTime": end_time_str,
+                "sessionPhase": session_phase,
+            },
+        },
+        "storageFolderUri": gsc_file_path,
+        "dashboardUri": "",
+        "duration": duration_str,
+        "kind": "KIND_PROGRAMMATIC",
+        "hostTracerLevel": "HOST_TRACER_LEVEL_INFO",
+        "deviceTracerLevel": "DEVICE_TRACER_LEVEL_ENABLED",
+        "pythonTracerLevel": "PYTHON_TRACER_LEVEL_DISABLED",
     }
 
     params = {"profiler_session_id": profiler_session_id}
@@ -381,6 +403,7 @@ class ControlPlaneClient:
           pprint.pformat(params),
           pprint.pformat(payload),
       )
+
     with requests.post(
         url,
         headers=self._get_headers(),
@@ -390,12 +413,30 @@ class ControlPlaneClient:
       try:
         response.raise_for_status()
       except requests.exceptions.HTTPError as e:
-        if e.response is not None and e.response.status_code == 409:
-          logger.info(
-              "Profiler session '%s' already exists, skipping creation.",
-              profiler_session_id,
-          )
-          return {"name": f"{parent}/profilerSessions/{profiler_session_id}"}
+        if response.status_code == 409:
+          err_dict = ast.literal_eval(response.text)
+          logger.info("DGP error dict: %s", err_dict)
+          for detail in err_dict.get("error", {}).get("details", []):
+            if (
+                detail.get("@type", "")
+                == "type.googleapis.com/google.rpc.ResourceInfo"
+            ):
+              resource_name = detail.get("resourceName", None)
+              if resource_name:
+                existing_session_id = resource_name.split("/")[-1]
+                logger.info(
+                    "Profiler session '%s' already exists, updating it.",
+                    profiler_session_id,
+                )
+                return self.update_profiler_session(
+                    ml_run_id=ml_run_id,
+                    profiler_session_id=existing_session_id,
+                    gsc_file_path=gsc_file_path,
+                    profiler_target=profiler_target,
+                    start_time=start_time,
+                    end_time=end_time,
+                    session_phase=session_phase,
+                )
 
         logger.exception(
             "Create Profiler Session request failed: status_code=%s,"
@@ -406,25 +447,91 @@ class ControlPlaneClient:
         raise
 
       json_response = response.json()
+
     logger.debug(
         "Create Profiler Session response: %s", pprint.pformat(json_response)
     )
 
-    operation = json_response
     if not json_response.get("done"):
       operation = self._wait_for_operation(json_response["name"])
+    else:
+      operation = json_response
 
-    logger.info(
-        "Create Profiler Session operation: %s", pprint.pformat(operation)
+    return operation
+
+  def update_profiler_session(
+      self,
+      ml_run_id: str,
+      profiler_session_id: str,
+      gsc_file_path: str,
+      profiler_target: str,
+      start_time: float,
+      end_time: float,
+      session_phase: str,
+  ) -> Dict[str, Any]:
+    """Update an existing ProfilerSession resource."""
+    parent = f"projects/{self.project_id}/locations/{self.location}/machineLearningRuns/{ml_run_id}"
+    url = f"{self.base_url}/{parent}/profilerSessions/{profiler_session_id}"
+
+    duration_sec = end_time - start_time
+    duration_str = f"{max(0.001, duration_sec):.3f}s"
+
+    start_time_str = datetime.datetime.fromtimestamp(
+        start_time, datetime.timezone.utc
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    end_time_str = datetime.datetime.fromtimestamp(
+        end_time, datetime.timezone.utc
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    payload = {
+        "profilerTargets": [profiler_target],
+        "targetSessions": {
+            profiler_target: {
+                "startTime": start_time_str,
+                "endTime": end_time_str,
+                "sessionPhase": session_phase,
+            },
+        },
+        "storageFolderUri": gsc_file_path,
+        "dashboardUri": "",
+        "duration": duration_str,
+        "kind": "KIND_PROGRAMMATIC",
+        "hostTracerLevel": "HOST_TRACER_LEVEL_INFO",
+        "deviceTracerLevel": "DEVICE_TRACER_LEVEL_ENABLED",
+        "pythonTracerLevel": "PYTHON_TRACER_LEVEL_DISABLED",
+    }
+    params = {"update_mask": "target_sessions"}
+    logger.debug(
+        "Update Profiler Session request: url=%s, params=%s, json=%s",
+        url,
+        pprint.pformat(params),
+        pprint.pformat(payload),
     )
+    with requests.patch(
+        url,
+        headers=self._get_headers(),
+        params=params,
+        json=payload,
+    ) as response:
+      try:
+        response.raise_for_status()
+      except requests.exceptions.HTTPError:
+        logger.error(
+            "Update Profiler Session request failed: status_code=%s,"
+            " content=%s",
+            response.status_code,
+            response.text,
+        )
+        raise
+      json_response = response.json()
 
-    if operation.get("error"):
-      raise requests.exceptions.HTTPError(
-          f"Operation {operation['name']} failed: {operation['error']}"
-      )
-
-    if operation.get("response"):
-      return operation["response"]
+    logger.debug(
+        "Update Profiler Session response: %s",
+        pprint.pformat(json_response),
+    )
+    if not json_response.get("done"):
+      operation = self._wait_for_operation(json_response["name"])
+    else:
+      operation = json_response
 
     return operation
 
@@ -492,6 +599,7 @@ class ControlPlaneClient:
 
     Raises:
         requests.exceptions.RequestException: If the HTTP request fails
+        RuntimeError: If the update fails to return a response or raise an error
     """
     for attempt in range(_MAX_RETRIES):
       try:
