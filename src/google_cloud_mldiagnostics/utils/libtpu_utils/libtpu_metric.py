@@ -32,6 +32,13 @@ def _initialize():
   if _initialized:
     return
 
+  if os.environ.get("MLRUN_SKIP_LIBTPU", "False").lower() == "true":
+    _initialized = True
+    libtpu_sdk = None
+    _monitoring_module = None
+    logger.info("Skipping libtpu initialization due to MLRUN_SKIP_LIBTPU.")
+    return
+
   _initialized = True
 
   old_flags = sys.getdlopenflags()

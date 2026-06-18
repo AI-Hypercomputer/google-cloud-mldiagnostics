@@ -29,7 +29,6 @@ import threading
 from typing import Callable
 
 from google_cloud_mldiagnostics.core import global_manager
-from google_cloud_mldiagnostics.core import xprof
 from google_cloud_mldiagnostics.custom_types import exceptions
 from google_cloud_mldiagnostics.custom_types import mlrun_types
 from google_cloud_mldiagnostics.utils import host_utils
@@ -53,14 +52,14 @@ class RunPhaseMonitor:
   def __init__(self):
     self._monitoring_started = False
     self._original_excepthook = sys.excepthook
-    self._is_master_host = host_utils.is_master_host()
     self._lock = threading.Lock()
     self._manager = global_manager.get_global_run_manager()
-    if not self._manager.has_active_run():
+    if not self._manager.has_active_run() or self._manager.run is None:
       raise exceptions.NoActiveRunError(
           "No active ML run found. Please initialize an ML run before"
           " monitoring."
       )
+    self._is_master_host = host_utils.is_master_host(self._manager.run.framework)
     self._control_plane_client = self._manager.control_plane_client
     if self._is_master_host and self._control_plane_client is None:
       raise exceptions.ControlPlaneClientNotInitializedError(

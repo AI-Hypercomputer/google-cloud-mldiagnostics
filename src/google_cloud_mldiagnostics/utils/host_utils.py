@@ -24,7 +24,7 @@ import socket
 from typing import Any
 
 from google_cloud_mldiagnostics.custom_types import metric_types
-from google_cloud_mldiagnostics.utils.jax_utils import jax_host
+from google_cloud_mldiagnostics.custom_types import mlrun_types
 import requests
 
 
@@ -207,20 +207,89 @@ def get_instance_id() -> str:
     return instance_id
 
 
-def get_process_index() -> int:
+_jax_host_module_cache = None
+
+
+def _import_jax_host_module():
+  """Lazy load jax_host module and cache result to avoid loading jax."""
+  global _jax_host_module_cache
+  if _jax_host_module_cache is not None:
+    return _jax_host_module_cache
+
+  from google_cloud_mldiagnostics.utils.jax_utils import jax_host  # pylint: disable=g-import-not-at-top
+
+  _jax_host_module_cache = jax_host
+  return _jax_host_module_cache
+
+
+def get_process_index(
+    framework: mlrun_types.Framework = mlrun_types.Framework.JAX,
+) -> int:
   """Returns host index."""
-  # TODO: [INTERNAL] - Add support for non-jax workloads.
-  return jax_host.get_jax_process_index()
+  if framework == mlrun_types.Framework.JAX:
+    # TODO: [INTERNAL] - Add support for non-jax workloads.
+    return _import_jax_host_module().get_jax_process_index()
+
+  # For non-JAX distributed frameworks (like vLLM/PyTorch), check standard env vars.
+  for env_var in ("NODE_RANK", "GROUP_RANK", "RANK", "JOB_COMPLETION_INDEX"):
+    val = os.environ.get(env_var)
+    if val is not None:
+      try:
+        return int(val)
+      except ValueError:
+        pass
+  return 0
 
 
-def get_accelerator_type() -> metric_types.AcceleratorType:
+def get_accelerator_type(
+    framework: mlrun_types.Framework | None = mlrun_types.Framework.JAX,
+) -> metric_types.AcceleratorType:
   """Returns the accelerator type of the current host."""
-  return jax_host.get_accelerator_type()
+  # 1. Fall back to inspecting JAX devices first if framework is JAX.
+  if framework == mlrun_types.Framework.JAX:
+    try:
+      jax_acc = _import_jax_host_module().get_accelerator_type()
+      if jax_acc != metric_types.AcceleratorType.UNKNOWN:
+        return jax_acc
+    except Exception:  # pylint: disable=broad-exception-caught
+      pass
+
+  # 2. Check environment variables
+  if any(
+      var in os.environ
+      for var in ["TPU_NAME", "TPU_ACCELERATOR_TYPE", "JAX_FORCE_TPU_INIT"]
+  ):
+    return metric_types.AcceleratorType.TPU
+  if any(
+      var in os.environ
+      for var in [
+          "CUDA_VISIBLE_DEVICES",
+          "NVIDIA_VISIBLE_DEVICES",
+          "CUDA_VERSION",
+      ]
+  ):
+    return metric_types.AcceleratorType.GPU
+
+  # 3. Check device nodes & libraries
+  import glob  # pylint: disable=g-import-not-at-top
+  if (
+      glob.glob("/dev/accel/tpu_*")
+      or os.path.exists("/dev/accel")
+      or os.path.exists("/usr/lib/libtpu.so")
+      or os.path.exists("/lib/libtpu.so")
+  ):
+    return metric_types.AcceleratorType.TPU
+  if glob.glob("/dev/nvidia*") or os.path.exists("/dev/dri/renderD128"):
+    return metric_types.AcceleratorType.GPU
+
+  return metric_types.AcceleratorType.UNKNOWN
 
 
-def is_master_host() -> bool:
+def is_master_host(
+    framework: mlrun_types.Framework = mlrun_types.Framework.JAX,
+) -> bool:
   """Checks if the current host is the master host."""
-  return get_process_index() == 0
+  return get_process_index(framework) == 0
 
 
 def get_workload_details() -> dict[str, Any] | None:

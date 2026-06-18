@@ -34,6 +34,11 @@ class RunPhase(enum.Enum):
   PHASE_FAILED = "FAILED"
 
 
+class Framework(enum.Enum):
+  JAX = "JAX"
+  VLLM = "VLLM"
+
+
 class ConfigDict(dict):
   """A dictionary that supports both dict-style and attribute-style access."""
 
@@ -97,6 +102,7 @@ class MLRun:
   display_name: str = ""
   on_demand_xprof: bool = False
   environment: str = ""
+  framework: Framework = Framework.JAX
 
   def __post_init__(self) -> None:
     gcp.validate_region(self.location)
