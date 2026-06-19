@@ -343,7 +343,7 @@ class ControlPlaneClient:
       gsc_file_path: str,
       profiler_target: str,
       start_time: float,
-      end_time: float,
+      end_time: Optional[float],
       session_phase: str,
   ) -> Dict[str, Any]:
     """Create a ProfilerSession resource.
@@ -366,24 +366,31 @@ class ControlPlaneClient:
     parent = f"projects/{self.project_id}/locations/{self.location}/machineLearningRuns/{ml_run_id}"
     url = f"{self.base_url}/{parent}/profilerSessions"
 
-    duration_sec = end_time - start_time
-    duration_str = f"{max(0.001, duration_sec):.3f}s"
+    if end_time is not None:
+      duration_sec = end_time - start_time
+      duration_str = f"{max(0.001, duration_sec):.3f}s"
+      end_time_str = datetime.datetime.fromtimestamp(
+          end_time, datetime.timezone.utc
+      ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    else:
+      duration_str = "0.001s"
+      end_time_str = "0001-01-01T00:00:00Z"
 
     start_time_str = datetime.datetime.fromtimestamp(
         start_time, datetime.timezone.utc
     ).strftime("%Y-%m-%dT%H:%M:%SZ")
-    end_time_str = datetime.datetime.fromtimestamp(
-        end_time, datetime.timezone.utc
-    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    target_session = {
+        "startTime": start_time_str,
+        "sessionPhase": session_phase,
+    }
+    if end_time_str:
+      target_session["endTime"] = end_time_str
 
     payload = {
         "profilerTargets": [profiler_target],
         "targetSessions": {
-            profiler_target: {
-                "startTime": start_time_str,
-                "endTime": end_time_str,
-                "sessionPhase": session_phase,
-            },
+            profiler_target: target_session,
         },
         "storageFolderUri": gsc_file_path,
         "dashboardUri": "",
@@ -415,7 +422,7 @@ class ControlPlaneClient:
       except requests.exceptions.HTTPError as e:
         if response.status_code == 409:
           err_dict = ast.literal_eval(response.text)
-          logger.info("DGP error dict: %s", err_dict)
+          logger.info("error dict: %s", err_dict)
           for detail in err_dict.get("error", {}).get("details", []):
             if (
                 detail.get("@type", "")
@@ -466,30 +473,38 @@ class ControlPlaneClient:
       gsc_file_path: str,
       profiler_target: str,
       start_time: float,
-      end_time: float,
+      end_time: Optional[float],
       session_phase: str,
   ) -> Dict[str, Any]:
     """Update an existing ProfilerSession resource."""
     parent = f"projects/{self.project_id}/locations/{self.location}/machineLearningRuns/{ml_run_id}"
     url = f"{self.base_url}/{parent}/profilerSessions/{profiler_session_id}"
 
-    duration_sec = end_time - start_time
-    duration_str = f"{max(0.001, duration_sec):.3f}s"
+    if end_time is not None:
+      duration_sec = end_time - start_time
+      duration_str = f"{max(0.001, duration_sec):.3f}s"
+      end_time_str = datetime.datetime.fromtimestamp(
+          end_time, datetime.timezone.utc
+      ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    else:
+      duration_str = "0.001s"
+      end_time_str = "0001-01-01T00:00:00Z"
 
     start_time_str = datetime.datetime.fromtimestamp(
         start_time, datetime.timezone.utc
     ).strftime("%Y-%m-%dT%H:%M:%SZ")
-    end_time_str = datetime.datetime.fromtimestamp(
-        end_time, datetime.timezone.utc
-    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    target_session = {
+        "startTime": start_time_str,
+        "sessionPhase": session_phase,
+    }
+    if end_time_str:
+      target_session["endTime"] = end_time_str
+
     payload = {
         "profilerTargets": [profiler_target],
         "targetSessions": {
-            profiler_target: {
-                "startTime": start_time_str,
-                "endTime": end_time_str,
-                "sessionPhase": session_phase,
-            },
+            profiler_target: target_session,
         },
         "storageFolderUri": gsc_file_path,
         "dashboardUri": "",
@@ -506,34 +521,50 @@ class ControlPlaneClient:
         pprint.pformat(params),
         pprint.pformat(payload),
     )
-    with requests.patch(
-        url,
-        headers=self._get_headers(),
-        params=params,
-        json=payload,
-    ) as response:
-      try:
-        response.raise_for_status()
-      except requests.exceptions.HTTPError:
-        logger.error(
-            "Update Profiler Session request failed: status_code=%s,"
-            " content=%s",
-            response.status_code,
-            response.text,
-        )
-        raise
-      json_response = response.json()
+    retry_count = 0
+    while retry_count < _MAX_RETRIES:
+      retry_count += 1
+      with requests.patch(
+          url,
+          headers=self._get_headers(),
+          params=params,
+          json=payload,
+      ) as response:
+        try:
+          response.raise_for_status()
+        except requests.exceptions.HTTPError:
+          logger.error(
+              "Try %s: Update Profiler Session request failed: status_code=%s,"
+              " content=%s",
+              retry_count,
+              response.status_code,
+              response.text,
+          )
+          # This is possible when multiple host try to update the session
+          # when its getting created.
+          if response.status_code == 409:
+            time.sleep(0.5)
+            continue
 
-    logger.debug(
-        "Update Profiler Session response: %s",
-        pprint.pformat(json_response),
+          raise
+        json_response = response.json()
+
+      logger.debug(
+          "Update Profiler Session response: %s",
+          pprint.pformat(json_response),
+      )
+      if not json_response.get("done"):
+        operation = self._wait_for_operation(json_response["name"])
+      else:
+        operation = json_response
+
+      return operation
+
+    raise RuntimeError(
+        f"update_profiler_session failed to return a response and max retries"
+        f" %s reached",
+        _MAX_RETRIES,
     )
-    if not json_response.get("done"):
-      operation = self._wait_for_operation(json_response["name"])
-    else:
-      operation = json_response
-
-    return operation
 
   def get_ml_run(self, name: str) -> Dict[str, Any]:
     """Get an existing ML run using the Google Cloud API.

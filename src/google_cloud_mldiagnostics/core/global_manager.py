@@ -85,10 +85,7 @@ class GlobalRunManager:
       self._ps_creation_start_time: float | None = None
       self._profiler_target: Optional[str] = None
 
-    if (
-        not hasattr(self, "_accelerator_type")
-        or accelerator_type is not None
-    ):
+    if not hasattr(self, "_accelerator_type") or accelerator_type is not None:
       self._accelerator_type = (
           accelerator_type or host_utils.get_accelerator_type(framework=None)
       )
@@ -364,12 +361,13 @@ class GlobalRunManager:
         logger.exception("Failed to create profiler target.")
         raise RuntimeError("Failed to create profiler target.") from None
 
-  def _start_profiler_session_creation_timer(
+  def _start_report_profiler_session_timer(
       self,
       wait_time_sec: float,
+      create_new_session: bool,
       session_id: str,
       start_time: float,
-      end_time: float,
+      end_time: Optional[float],
       session_phase: str,
       context_msg: str,
   ) -> None:
@@ -389,22 +387,32 @@ class GlobalRunManager:
     )
     self._timer_ps_creation = threading.Timer(
         wait_time_sec,
-        self.create_profiler_session,
-        args=(session_id, start_time, end_time, session_phase, context_msg),
+        self.create_or_update_profiler_session,
+        args=(
+            create_new_session,
+            session_id,
+            start_time,
+            end_time,
+            session_phase,
+            context_msg,
+        ),
     )
     self._timer_ps_creation.start()
 
-  def create_profiler_session(
+  def create_or_update_profiler_session(
       self,
+      create_new_session: bool,
       session_id: str,
       start_time: float,
-      end_time: float,
+      end_time: Optional[float],
       session_phase: str,
       context_msg: str,
   ) -> None:
     """Create profiler session for the ML run.
 
     Args:
+        create_new_session: Whether to create a new session or update an existing
+          one.
         session_id: The session ID to use for the profiling session.
         start_time: Requested start time of the profile.
         end_time: Requested end time of the profile.
@@ -430,8 +438,14 @@ class GlobalRunManager:
             "Prerequisites not met for session creation. Retrying after 0.2"
             " seconds."
         )
-        self._start_profiler_session_creation_timer(
-            0.2, session_id, start_time, end_time, session_phase, context_msg
+        self._start_report_profiler_session_timer(
+            0.2,
+            create_new_session,
+            session_id,
+            start_time,
+            end_time,
+            session_phase,
+            context_msg,
         )
         return
 
@@ -467,7 +481,12 @@ class GlobalRunManager:
           )
           return
 
-        resp = client.create_profiler_session(
+        report_function = (
+            client.create_profiler_session
+            if create_new_session
+            else client.update_profiler_session
+        )
+        resp = report_function(
             ml_run_id=self._ml_run.name,
             profiler_session_id=session_id,
             gsc_file_path=self._ml_run.gcs_path + "/" + session_id,
@@ -494,8 +513,14 @@ class GlobalRunManager:
               "ML Run or Target not found, retrying profiler session"
               " creation..."
           )
-          self._start_profiler_session_creation_timer(
-              0.5, session_id, start_time, end_time, session_phase, context_msg
+          self._start_report_profiler_session_timer(
+              0.5,
+              create_new_session,
+              session_id,
+              start_time,
+              end_time,
+              session_phase,
+              context_msg,
           )
           return
 

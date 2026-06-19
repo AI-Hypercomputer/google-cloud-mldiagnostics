@@ -316,3 +316,15 @@ def sanitize_identifier(identifier: str) -> str:
   # Remove leading/trailing hyphens
   sanitized_id = sanitized_id.strip("-")
   return sanitized_id
+
+def effective_session_id(session_id: str | None = None) -> str:
+  """Returns the effective session ID."""
+  if not session_id:
+    session_id = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    logger.debug(
+        "Profiling session_id not provided, generated"
+        " session_id using current timestamp: %s",
+        session_id,
+    )
+
+  return session_id
