@@ -22,7 +22,6 @@ from typing import Any
 
 from google_cloud_mldiagnostics.core import global_manager
 from google_cloud_mldiagnostics.core import metrics
-from google_cloud_mldiagnostics.core import xprof
 from google_cloud_mldiagnostics.custom_types import metric_types
 from google_cloud_mldiagnostics.custom_types import mlrun_types
 from google_cloud_mldiagnostics.utils import config_utils
@@ -40,12 +39,13 @@ _METRICS_RECORDER_THREAD_STARTED = False
 def _create_metric_collector(
     metric_name: str,
     collect_func: Any,
+    framework: mlrun_types.Framework,
     accelerator_type: str | None = None,
 ) -> tuple[str, Any, dict[str, str]]:
   """Creates a metric collector tuple with standardized labels."""
   labels = {
       "hostname": host_utils.get_hostname(),
-      "process_index": str(host_utils.get_process_index()),
+      "process_index": str(host_utils.get_process_index(framework)),
       "unit": "%",
   }
   if accelerator_type is not None:
@@ -63,6 +63,8 @@ def initialize_mlrun(
     project: str | None = None,
     region: str | None = None,
     metrics_record_interval_sec: float = 10.0,
+    framework: mlrun_types.Framework = mlrun_types.Framework.JAX,
+    serving_engine: mlrun_types.ServingEngine = mlrun_types.ServingEngine.NONE,
 ) -> mlrun_types.MLRun:
   """Initializes a new ML run.
 
@@ -78,13 +80,14 @@ def initialize_mlrun(
       project: The Google Cloud project ID.
       region: The Google Cloud region.
       metrics_record_interval_sec: The metrics record interval in seconds.
+      framework: The framework used for the run.
 
   Returns:
       The initialized ML run object.
   """
   # Combine default configs with user configs.
-  software_configs = config_utils.get_software_config()
-  hardware_configs = config_utils.get_hardware_config()
+  software_configs = config_utils.get_software_config(framework, serving_engine)
+  hardware_configs = config_utils.get_hardware_config(framework, serving_engine)
   user_configs = configs if configs else {}
   configs = mlrun_types.ConfigDict({
       "softwareConfigs": software_configs,
@@ -142,6 +145,8 @@ def initialize_mlrun(
       display_name=display_name,
       on_demand_xprof=on_demand_xprof,
       environment=environment,
+      framework=framework,
+      serving_engine=serving_engine,
   )
 
   # register the run to global manager.
@@ -174,36 +179,42 @@ def initialize_mlrun(
   run_phase_monitor.start()
 
   global _METRICS_RECORDER_THREAD_STARTED
-  if not _METRICS_RECORDER_THREAD_STARTED:
+  if metrics_record_interval_sec > 0 and not _METRICS_RECORDER_THREAD_STARTED:
+    framework = ml_run.framework
     with _METRICS_RECORDER_THREAD_LOCK:
       if not _METRICS_RECORDER_THREAD_STARTED:
         # Avoid starting the metrics recorder thread repeatedly if the run is
         # already initialized.
-        accelerator_type = config_utils.get_accelerator_type()
+        accelerator_type = config_utils.get_accelerator_type(framework)
         if accelerator_type == metric_types.AcceleratorType.GPU.value:
           metric_collectors = [
               _create_metric_collector(
                   metric_types.MetricType.GPU_UTILIZATION.value,
                   gpu_metric.get_gpu_utilization,
+                  framework,
                   metric_types.AcceleratorType.GPU.value,
               ),
               _create_metric_collector(
                   metric_types.MetricType.GPU_TENSORCORE_UTILIZATION.value,
                   gpu_metric.get_gpu_tensorcore_utilization,
+                  framework,
                   metric_types.AcceleratorType.GPU.value,
               ),
               _create_metric_collector(
                   metric_types.MetricType.VRAM_UTILIZATION.value,
                   gpu_metric.get_vram_utilization,
+                  framework,
                   metric_types.AcceleratorType.GPU.value,
               ),
               _create_metric_collector(
                   metric_types.MetricType.HOST_CPU_UTILIZATION.value,
                   metric_utils.get_host_cpu_utilization,
+                  framework,
               ),
               _create_metric_collector(
                   metric_types.MetricType.HOST_MEMORY_UTILIZATION.value,
                   metric_utils.get_host_memory_utilization,
+                  framework,
               ),
           ]
         else:
@@ -211,25 +222,30 @@ def initialize_mlrun(
               _create_metric_collector(
                   metric_types.MetricType.TPU_DUTY_CYCLE.value,
                   metric_utils.get_tpu_duty_cycle,
+                  framework,
                   metric_types.AcceleratorType.TPU.value,
               ),
               _create_metric_collector(
                   metric_types.MetricType.TPU_TENSORCORE_UTILIZATION.value,
                   metric_utils.get_tpu_tensorcore_utilization,
+                  framework,
                   metric_types.AcceleratorType.TPU.value,
               ),
               _create_metric_collector(
                   metric_types.MetricType.HBM_UTILIZATION.value,
                   metric_utils.get_hbm_utilization,
+                  framework,
                   metric_types.AcceleratorType.TPU.value,
               ),
               _create_metric_collector(
                   metric_types.MetricType.HOST_CPU_UTILIZATION.value,
                   metric_utils.get_host_cpu_utilization,
+                  framework,
               ),
               _create_metric_collector(
                   metric_types.MetricType.HOST_MEMORY_UTILIZATION.value,
                   metric_utils.get_host_memory_utilization,
+                  framework,
               ),
           ]
         default_metrics_recorder = metrics.MetricsRecorderThread(
@@ -246,7 +262,9 @@ def initialize_mlrun(
     # LINT.IfChange(xprof_port)
     xprof_port = 9999
     # LINT.ThenChange(//depot/google3/cloud/hosted/hypercomputecluster/clh/diagnostics/consumerservice/profilersession.go:defaultCapturePort)
+    from google_cloud_mldiagnostics.core import xprof  # pylint: disable=g-import-not-at-top
     xprof.start_on_demand_xprof(port=xprof_port)
+    run_phase_monitor.register_cleanup_handler(xprof.stop_on_demand_xprof)
 
   return ml_run
 

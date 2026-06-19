@@ -90,7 +90,7 @@ class GlobalRunManager:
         or accelerator_type is not None
     ):
       self._accelerator_type = (
-          accelerator_type or host_utils.get_accelerator_type()
+          accelerator_type or host_utils.get_accelerator_type(framework=None)
       )
 
   def initialize(self, mlrun: mlrun_types.MLRun) -> None:
@@ -117,6 +117,10 @@ class GlobalRunManager:
         )
 
       self._ml_run = mlrun
+      if self._accelerator_type == metric_types.AcceleratorType.UNKNOWN:
+        self._accelerator_type = host_utils.get_accelerator_type(
+            mlrun.framework, mlrun.serving_engine
+        )
       self._current_logging_client = logging_client.LoggingClient(
           project_id=mlrun.project
       )
@@ -126,7 +130,7 @@ class GlobalRunManager:
           environment=mlrun.environment,
       )
 
-      if not host_utils.is_master_host():
+      if not host_utils.is_master_host(mlrun.framework, mlrun.serving_engine):
         logger.info(
             "Skipping ML run initialization on control plane (run_group=%s,"
             " name=%s): Current host is not the master host.",
@@ -211,6 +215,8 @@ class GlobalRunManager:
                         "enabled" if mlrun.on_demand_xprof else "disabled"
                     ),
                     "accelerator_type": self._accelerator_type.value,
+                    "framework": mlrun.framework.value.lower(),
+                    "serving_engine": mlrun.serving_engine.value.lower() if mlrun.serving_engine != mlrun_types.ServingEngine.NONE else "",
                 },
                 orchestrator=mlrun.orchestrator,
                 workload_details=mlrun.workload_details,
@@ -336,11 +342,15 @@ class GlobalRunManager:
       try:
         instance_id = host_utils.get_instance_id()
         hostname = host_utils.get_hostname()
-        node_index = host_utils.get_process_index()
+        node_index = host_utils.get_process_index(
+            self._ml_run.framework, self._ml_run.serving_engine
+        )
         client.create_profiler_target(
             ml_run_name=self._ml_run.name,
             name=instance_id,
-            is_master=host_utils.is_master_host(),
+            is_master=host_utils.is_master_host(
+                self._ml_run.framework, self._ml_run.serving_engine
+            ),
             hostname=hostname,
             node_index=node_index,
         )
@@ -567,7 +577,7 @@ class GlobalRunManager:
   ) -> Optional[control_plane_client.ControlPlaneClient]:
     """Get the current control plane client."""
     with self._lock:
-      if host_utils.is_master_host():
+      if self._ml_run and host_utils.is_master_host(self._ml_run.framework, self._ml_run.serving_engine):
         return self._control_plane_client
       return None
 

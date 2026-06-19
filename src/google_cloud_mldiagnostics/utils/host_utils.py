@@ -224,11 +224,13 @@ def _import_jax_host_module():
 
 def get_process_index(
     framework: mlrun_types.Framework = mlrun_types.Framework.JAX,
+    serving_engine: mlrun_types.ServingEngine = mlrun_types.ServingEngine.NONE,
 ) -> int:
   """Returns host index."""
-  if framework == mlrun_types.Framework.JAX:
-    # TODO: [INTERNAL] - Add support for non-jax workloads.
-    return _import_jax_host_module().get_jax_process_index()
+  if framework == mlrun_types.Framework.JAX and serving_engine == mlrun_types.ServingEngine.NONE:
+    if os.environ.get("MLRUN_SKIP_LIBTPU", "False").lower() != "true":
+      # TODO: [INTERNAL] - Add support for non-jax workloads.
+      return _import_jax_host_module().get_jax_process_index()
 
   # For non-JAX distributed frameworks (like vLLM/PyTorch), check standard env vars.
   for env_var in ("NODE_RANK", "GROUP_RANK", "RANK", "JOB_COMPLETION_INDEX"):
@@ -243,16 +245,18 @@ def get_process_index(
 
 def get_accelerator_type(
     framework: mlrun_types.Framework | None = mlrun_types.Framework.JAX,
+    serving_engine: mlrun_types.ServingEngine = mlrun_types.ServingEngine.NONE,
 ) -> metric_types.AcceleratorType:
   """Returns the accelerator type of the current host."""
-  # 1. Fall back to inspecting JAX devices first if framework is JAX.
-  if framework == mlrun_types.Framework.JAX:
-    try:
-      jax_acc = _import_jax_host_module().get_accelerator_type()
-      if jax_acc != metric_types.AcceleratorType.UNKNOWN:
-        return jax_acc
-    except Exception:  # pylint: disable=broad-exception-caught
-      pass
+  # 1. Fall back to inspecting JAX devices first if framework is JAX and serving_engine is NONE.
+  if framework == mlrun_types.Framework.JAX and serving_engine == mlrun_types.ServingEngine.NONE:
+    if os.environ.get("MLRUN_SKIP_LIBTPU", "False").lower() != "true":
+      try:
+        jax_acc = _import_jax_host_module().get_accelerator_type()
+        if jax_acc != metric_types.AcceleratorType.UNKNOWN:
+          return jax_acc
+      except Exception:  # pylint: disable=broad-exception-caught
+        pass
 
   # 2. Check environment variables
   if any(
@@ -287,9 +291,10 @@ def get_accelerator_type(
 
 def is_master_host(
     framework: mlrun_types.Framework = mlrun_types.Framework.JAX,
+    serving_engine: mlrun_types.ServingEngine = mlrun_types.ServingEngine.NONE,
 ) -> bool:
   """Checks if the current host is the master host."""
-  return get_process_index(framework) == 0
+  return get_process_index(framework, serving_engine) == 0
 
 
 def get_workload_details() -> dict[str, Any] | None:

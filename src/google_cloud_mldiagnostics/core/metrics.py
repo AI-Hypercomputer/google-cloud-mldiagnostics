@@ -173,7 +173,9 @@ class _MetricsRecorder:
         try:
           ml_run, logging_client_instance = self._get_active_run_and_client()
           if self._is_master_host is None:
-            self._is_master_host = host_utils.is_master_host()
+            self._is_master_host = host_utils.is_master_host(
+                ml_run.framework, ml_run.serving_engine
+            )
           is_master_host = self._is_master_host
         except exceptions.NoActiveRunError:
           # If no active run yet, sleep briefly and retry on next loop.
@@ -382,7 +384,6 @@ class MetricsRecorderThread:
     self._interval_seconds = interval_seconds
     self._thread: threading.Thread | None = None
     self._stop_event = threading.Event()
-    self._is_master_host = host_utils.is_master_host()
 
   def _get_active_run_and_client(self) -> tuple[
       mlrun_types.MLRun,
@@ -411,7 +412,10 @@ class MetricsRecorderThread:
       )
 
     control_plane_client_instance = manager.control_plane_client
-    if self._is_master_host and control_plane_client_instance is None:
+    if (
+        host_utils.is_master_host(ml_run.framework, ml_run.serving_engine)
+        and control_plane_client_instance is None
+    ):
       raise exceptions.ControlPlaneClientNotInitializedError(
           "Required services are not initialized on the master host."
       )
@@ -484,8 +488,8 @@ class MetricsRecorderThread:
     """Update the time metric in control plane."""
     # Only update control plane time from the master host. This avoids
     # unnecessary client fetches and updates on worker hosts.
-    if self._is_master_host:
-      ml_run, control_plane_client_instance = self._get_active_run_and_client()
+    ml_run, control_plane_client_instance = self._get_active_run_and_client()
+    if host_utils.is_master_host(ml_run.framework, ml_run.serving_engine):
       if control_plane_client_instance is None:
         raise exceptions.ControlPlaneClientNotInitializedError(
             "Required services are not initialized on the master host."

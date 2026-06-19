@@ -65,12 +65,6 @@ class Xprof:
     self._gcs_profile_dir = None
     self._initialized = False
     self._process_index_list = process_index_list
-    if self._process_index_list is None:
-      self._should_profile = True
-    else:
-      self._should_profile = (
-          host_utils.get_process_index() in self._process_index_list
-      )
 
     self._start_time = None
 
@@ -108,11 +102,29 @@ class Xprof:
     )
 
     self._initialized = True
+    
+  def _should_profile(self):
+    if self._process_index_list is None or (
+        self._resolved_run is not None
+        and host_utils.get_process_index(self._resolved_run.framework)
+        in self._process_index_list
+    ):
+      return True
+    return False
+
 
   def _finalize_and_report_session(self, context_msg: str) -> None:
     """Reports the profiler session to the Control Plane."""
     if self._resolved_run and self._resolved_run.environment == "prod":
       return
+    framework = self._resolved_run.framework if self._resolved_run else mlrun_types.Framework.JAX
+    serving_engine = self._resolved_run.serving_engine if self._resolved_run else mlrun_types.ServingEngine.NONE
+    now = time.time()
+    if host_utils.is_master_host(framework, serving_engine):
+      duration_str = None
+      if self._start_time is not None:
+        duration_sec = now - self._start_time
+        duration_str = f"{max(0.001, duration_sec):.3f}s"
 
     logger.info(
         "Scheduling profiler session report in background for %r",
@@ -121,7 +133,7 @@ class Xprof:
     global_manager.GlobalRunManager.get_instance().create_profiler_session(
         session_id=self._current_session_id,
         start_time=self._start_time,
-        end_time=time.time(),
+        end_time=now,
         session_phase="SUCCEEDED",
         context_msg=context_msg,
     )
@@ -140,7 +152,7 @@ class Xprof:
       logger.warning("Profiling is already active. Call stop() first.")
       return
 
-    if not self._should_profile:
+    if not self._should_profile():
       logger.info("profiling_status: skipped")
       return
 
@@ -198,7 +210,7 @@ class Xprof:
     """Context manager entry point."""
     # Ensure initialization happens before entering context
     self._ensure_initialized()
-    if not self._should_profile:
+    if not self._should_profile():
       logger.info("profiling_status: skipped")
       return self
 
