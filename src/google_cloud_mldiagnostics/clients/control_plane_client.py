@@ -15,6 +15,7 @@
 """Client for sending requests to Diagon Control Plane."""
 
 import ast
+import datetime
 import logging
 import pprint
 import random
@@ -30,6 +31,42 @@ import requests
 
 logger = logging.getLogger(__name__)
 _MAX_RETRIES = 3
+
+
+def _normalize_rfc3339(timestamp: str) -> str:
+  """Normalizes a timestamp to RFC 3339 with a trailing 'Z' (UTC).
+
+  The GKE workload ``createTime`` is sent to the control plane as a
+  ``google.protobuf.Timestamp``, which is rejected with HTTP 400
+  INVALID_ARGUMENT ("timestamps must end with 'Z' or have a valid timezone
+  offset") if it is not strict RFC 3339. The source ``creation-timestamp`` comes
+  from the injected ``GKE_DIAGON_METADATA`` env and is not guaranteed to be
+  RFC 3339, so normalize it here before sending. Best effort: if the value
+  cannot be parsed it is returned unchanged (the control plane still validates).
+  """
+  if not timestamp:
+    return timestamp
+  try:
+    ts = timestamp.strip()
+    # Python < 3.11 fromisoformat rejects a trailing 'Z'.
+    if ts.endswith("Z"):
+      ts = ts[:-1] + "+00:00"
+    parsed = datetime.datetime.fromisoformat(ts)
+    if parsed.tzinfo is None:
+      parsed = parsed.replace(tzinfo=datetime.timezone.utc)
+    return (
+        parsed.astimezone(datetime.timezone.utc)
+        .strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3]
+        + "Z"
+    )
+  except (ValueError, TypeError):
+    logger.warning(
+        "Could not normalize createTime %r to RFC 3339; sending as-is.",
+        timestamp,
+    )
+    return timestamp
+
+
 _ERROR_CODE_ALREADY_EXISTS = 6
 
 
@@ -258,7 +295,9 @@ class ControlPlaneClient:
           gke_workload_details["labels"] = workload_details["labels"]
         creation_timestamp = workload_details.get("creation-timestamp")
         if creation_timestamp:
-          gke_workload_details["createTime"] = creation_timestamp
+          gke_workload_details["createTime"] = _normalize_rfc3339(
+              creation_timestamp
+          )
         payload["workloadDetails"] = {"gke": gke_workload_details}
 
     # Sanitize the name for machineLearningRunId
