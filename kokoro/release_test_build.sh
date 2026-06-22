@@ -25,7 +25,7 @@ build_and_copy_artifacts "${OUTPUT_DIR}"
 # TODO: Add automated tests here (e.g., smoke tests) before publishing.
 
 echo "Installing twine and Artifact Registry authentication helpers..."
-python -m pip install -U keyring keyrings.google-artifactregistry-auth twine
+python -m pip install --default-timeout=100 --retries 5 -U keyring keyrings.google-artifactregistry-auth twine
 
 echo "Publishing to OSS Exit Gate Staging Artifact Registry..."
 # Upload the built wheels to the internal staging repository.
