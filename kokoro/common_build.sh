@@ -6,6 +6,19 @@ set -o pipefail
 # Global configuration
 PYTHON_VERSION="3.10.14"
 
+# Configure secure Airlock routing and disable pip cache only on the dedicated pool.
+# Shared pools (like presubmits) do not have access to the Airlock proxy and must use default routing.
+if [[ "${KOKORO_JOB_POOL}" == "diagon-sdk/default" ]]; then
+  echo "Running on dedicated pool. Enabling Airlock routing and cache bypass."
+  # Route all pip downloads through the secure internal Airlock PyPI mirror
+  export PIP_INDEX_URL="https://us-python.pkg.dev/artifact-foundry-prod/python-3p-trusted/simple/"
+  # Disable pip cache globally to prevent known Kokoro proxy-caching hangs
+  export PIP_NO_CACHE_DIR=true
+else
+  echo "Running on shared pool. Using default PyPI routing."
+fi
+
+
 # Setup Java environment.
 setup_java() {
   echo "Using hermetic Java JDK from MPM..."
