@@ -84,7 +84,7 @@ build_and_copy_artifacts() {
 
     # Install dependencies specified for the build process.
     echo "Installing build dependencies..."
-    python -m pip install -r kokoro/requirements-build.txt
+    python -m pip install --upgrade -r kokoro/requirements-build.txt
 
     # Run the build tool to generate distribution packages (wheel and tarball).
     # Pass --no-isolation to prevent it from fetching dependencies from PyPI.

@@ -33,7 +33,7 @@ python -m pip install twine
 
 echo "Publishing to PyPI..."
 # TWINE_PASSWORD must be set in the environment via Kokoro Keystore/UI
-python -m twine upload "${KOKORO_ARTIFACTS_DIR}/dist/*"
+python -m twine upload --skip-existing "${KOKORO_ARTIFACTS_DIR}/dist/*"
 echo "Successfully uploaded to PyPI! You can check the history at: https://pypi.org/project/google-cloud-mldiagnostics/#history"
 
 # Phase 2: MOSS Compliance & Staging (Commented out for direct PyPI release)
