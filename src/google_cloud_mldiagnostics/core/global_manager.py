@@ -211,6 +211,9 @@ class GlobalRunManager:
                     "on_demand_xprof": (
                         "enabled" if mlrun.on_demand_xprof else "disabled"
                     ),
+                    "sdk_report_system_metrics": (
+                        "true" if mlrun.log_system_metrics else "false"
+                    ),
                     "accelerator_type": self._accelerator_type.value,
                     "framework": mlrun.framework.value.lower(),
                     "serving_engine": mlrun.serving_engine.value.lower() if mlrun.serving_engine != mlrun_types.ServingEngine.NONE else "",

@@ -57,6 +57,7 @@ def initialize_mlrun(
     name: str,
     environment: str,
     on_demand_xprof: bool,
+    log_system_metrics: bool = False,
     run_group: str | None = None,
     configs: Mapping[str, Any] | None = None,
     gcs_path: str | None = None,
@@ -144,6 +145,7 @@ def initialize_mlrun(
       orchestrator=orchestrator,
       display_name=display_name,
       on_demand_xprof=on_demand_xprof,
+      log_system_metrics=log_system_metrics,
       environment=environment,
       framework=framework,
       serving_engine=serving_engine,
@@ -185,69 +187,74 @@ def initialize_mlrun(
       if not _METRICS_RECORDER_THREAD_STARTED:
         # Avoid starting the metrics recorder thread repeatedly if the run is
         # already initialized.
-        accelerator_type = config_utils.get_accelerator_type(framework)
-        if accelerator_type == metric_types.AcceleratorType.GPU.value:
-          metric_collectors = [
-              _create_metric_collector(
-                  metric_types.MetricType.GPU_UTILIZATION.value,
-                  gpu_metric.get_gpu_utilization,
-                  framework,
-                  metric_types.AcceleratorType.GPU.value,
-              ),
-              _create_metric_collector(
-                  metric_types.MetricType.GPU_TENSORCORE_UTILIZATION.value,
-                  gpu_metric.get_gpu_tensorcore_utilization,
-                  framework,
-                  metric_types.AcceleratorType.GPU.value,
-              ),
-              _create_metric_collector(
-                  metric_types.MetricType.VRAM_UTILIZATION.value,
-                  gpu_metric.get_vram_utilization,
-                  framework,
-                  metric_types.AcceleratorType.GPU.value,
-              ),
-              _create_metric_collector(
-                  metric_types.MetricType.HOST_CPU_UTILIZATION.value,
-                  metric_utils.get_host_cpu_utilization,
-                  framework,
-              ),
-              _create_metric_collector(
-                  metric_types.MetricType.HOST_MEMORY_UTILIZATION.value,
-                  metric_utils.get_host_memory_utilization,
-                  framework,
-              ),
-          ]
+        metric_collectors = []
+        if log_system_metrics:
+          logging.info("System metrics logging is enabled.")
+          accelerator_type = config_utils.get_accelerator_type(framework)
+          if accelerator_type == metric_types.AcceleratorType.GPU.value:
+            metric_collectors = [
+                _create_metric_collector(
+                    metric_types.MetricType.GPU_UTILIZATION.value,
+                    gpu_metric.get_gpu_utilization,
+                    framework,
+                    metric_types.AcceleratorType.GPU.value,
+                ),
+                _create_metric_collector(
+                    metric_types.MetricType.GPU_TENSORCORE_UTILIZATION.value,
+                    gpu_metric.get_gpu_tensorcore_utilization,
+                    framework,
+                    metric_types.AcceleratorType.GPU.value,
+                ),
+                _create_metric_collector(
+                    metric_types.MetricType.VRAM_UTILIZATION.value,
+                    gpu_metric.get_vram_utilization,
+                    framework,
+                    metric_types.AcceleratorType.GPU.value,
+                ),
+                _create_metric_collector(
+                    metric_types.MetricType.HOST_CPU_UTILIZATION.value,
+                    metric_utils.get_host_cpu_utilization,
+                    framework,
+                ),
+                _create_metric_collector(
+                    metric_types.MetricType.HOST_MEMORY_UTILIZATION.value,
+                    metric_utils.get_host_memory_utilization,
+                    framework,
+                ),
+            ]
+          else:
+            metric_collectors = [
+                _create_metric_collector(
+                    metric_types.MetricType.TPU_DUTY_CYCLE.value,
+                    metric_utils.get_tpu_duty_cycle,
+                    framework,
+                    metric_types.AcceleratorType.TPU.value,
+                ),
+                _create_metric_collector(
+                    metric_types.MetricType.TPU_TENSORCORE_UTILIZATION.value,
+                    metric_utils.get_tpu_tensorcore_utilization,
+                    framework,
+                    metric_types.AcceleratorType.TPU.value,
+                ),
+                _create_metric_collector(
+                    metric_types.MetricType.HBM_UTILIZATION.value,
+                    metric_utils.get_hbm_utilization,
+                    framework,
+                    metric_types.AcceleratorType.TPU.value,
+                ),
+                _create_metric_collector(
+                    metric_types.MetricType.HOST_CPU_UTILIZATION.value,
+                    metric_utils.get_host_cpu_utilization,
+                    framework,
+                ),
+                _create_metric_collector(
+                    metric_types.MetricType.HOST_MEMORY_UTILIZATION.value,
+                    metric_utils.get_host_memory_utilization,
+                    framework,
+                ),
+            ]
         else:
-          metric_collectors = [
-              _create_metric_collector(
-                  metric_types.MetricType.TPU_DUTY_CYCLE.value,
-                  metric_utils.get_tpu_duty_cycle,
-                  framework,
-                  metric_types.AcceleratorType.TPU.value,
-              ),
-              _create_metric_collector(
-                  metric_types.MetricType.TPU_TENSORCORE_UTILIZATION.value,
-                  metric_utils.get_tpu_tensorcore_utilization,
-                  framework,
-                  metric_types.AcceleratorType.TPU.value,
-              ),
-              _create_metric_collector(
-                  metric_types.MetricType.HBM_UTILIZATION.value,
-                  metric_utils.get_hbm_utilization,
-                  framework,
-                  metric_types.AcceleratorType.TPU.value,
-              ),
-              _create_metric_collector(
-                  metric_types.MetricType.HOST_CPU_UTILIZATION.value,
-                  metric_utils.get_host_cpu_utilization,
-                  framework,
-              ),
-              _create_metric_collector(
-                  metric_types.MetricType.HOST_MEMORY_UTILIZATION.value,
-                  metric_utils.get_host_memory_utilization,
-                  framework,
-              ),
-          ]
+          logging.info("System metrics logging is disabled.")
         default_metrics_recorder = metrics.MetricsRecorderThread(
             metric_collectors=metric_collectors,
             interval_seconds=metrics_record_interval_sec,

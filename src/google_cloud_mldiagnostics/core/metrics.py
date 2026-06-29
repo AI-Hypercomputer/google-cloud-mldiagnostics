@@ -35,6 +35,17 @@ from google_cloud_mldiagnostics.utils import host_utils
 
 logger = logging.getLogger(__name__)
 
+_SYSTEM_METRICS = {
+    metric_types.MetricType.TPU_DUTY_CYCLE.value,
+    metric_types.MetricType.TPU_TENSORCORE_UTILIZATION.value,
+    metric_types.MetricType.HBM_UTILIZATION.value,
+    metric_types.MetricType.GPU_UTILIZATION.value,
+    metric_types.MetricType.GPU_TENSORCORE_UTILIZATION.value,
+    metric_types.MetricType.VRAM_UTILIZATION.value,
+    metric_types.MetricType.HOST_CPU_UTILIZATION.value,
+    metric_types.MetricType.HOST_MEMORY_UTILIZATION.value,
+}
+
 
 # TODO([INTERNAL]): Create a module to cache and average key metric values.
 class _MetricsRecorder:
@@ -104,13 +115,17 @@ class _MetricsRecorder:
     return None
 
   def _process_single_metric_item(
-      self, item: Mapping[str, Any], is_master_host: bool
+      self,
+      item: Mapping[str, Any],
+      is_master_host: bool,
+      log_system_metrics: bool = False,
   ) -> dict[str, Any] | None:
     """Processes a single metric item from the queue.
 
     Args:
       item: The metric item dictionary from the queue.
       is_master_host: Whether the current host is the master host.
+      log_system_metrics: Whether to log system utilization metrics.
 
     Returns:
       A dictionary representing the metric to be written if it should be
@@ -122,6 +137,9 @@ class _MetricsRecorder:
     value = metric_info.get("value")
     step = metric_info.get("step")
     labels = metric_info.get("labels")
+
+    if not log_system_metrics and metric_name in _SYSTEM_METRICS:
+      return None
 
     if metric_name is None or value is None:
       logger.warning(
@@ -194,7 +212,9 @@ class _MetricsRecorder:
                 continue
 
               metric_to_write = self._process_single_metric_item(
-                  item, is_master_host
+                  item,
+                  is_master_host,
+                  log_system_metrics=ml_run.log_system_metrics,
               )
               if metric_to_write:
                 metrics_to_write.append(metric_to_write)
