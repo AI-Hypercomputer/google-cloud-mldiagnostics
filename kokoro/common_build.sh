@@ -35,7 +35,7 @@ run_copybara() {
   local COPYBARA_JAR="${KOKORO_ARTIFACTS_DIR}/mpm/copybara/copybara_on_kokoro_deploy.jar"
   local COPYBARA_RUNFILES="${KOKORO_ARTIFACTS_DIR}/mpm/copybara/google3"
 
-  echo "Running CopyBara for Kokoro via Java 21..."
+  echo "Running CopyBara for Kokoro..."
   # Run CopyBara in a subshell to avoid changing the global working directory.
   (
     cd "${KOKORO_PIPER_DIR}"
