@@ -133,12 +133,12 @@ def initialize_mlrun(
   sanitized_name = host_utils.sanitize_identifier(name)
 
   ml_run = mlrun_types.MLRun(
-      run_group=run_group,
+      run_group=run_group,  # pyrefly: ignore[bad-argument-type]
       name=sanitized_name,
       configs=configs,
       gcs_path=gcs_path,
-      location=region,
-      project=project,
+      location=region,  # pyrefly: ignore[bad-argument-type]
+      project=project,  # pyrefly: ignore[bad-argument-type]
       run_phase=run_phase,
       created_at=created_at,
       workload_details=workload_details,
@@ -155,7 +155,7 @@ def initialize_mlrun(
   manager = global_manager.get_global_run_manager()
   manager.initialize(ml_run)
 
-  ml_diagnostics_url = create_diagnostics_url(region, project, sanitized_name)
+  ml_diagnostics_url = create_diagnostics_url(region, project, sanitized_name)  # pyrefly: ignore[bad-argument-type]
   xprof_url = create_xprof_url(ml_diagnostics_url)
   logging.info("MLRun '%s' created successfully.", ml_run.display_name)
   logging.info(
@@ -170,7 +170,7 @@ def initialize_mlrun(
   )
 
   if orchestrator == "GKE":
-    gke_url = create_gke_url(region, project, sanitized_name)
+    gke_url = create_gke_url(region, project, sanitized_name)  # pyrefly: ignore[bad-argument-type]
     logging.info(
         "GKE detail view URL: %s : %s",
         ml_run.display_name,

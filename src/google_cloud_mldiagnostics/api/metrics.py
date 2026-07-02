@@ -23,7 +23,7 @@ _metrics_recorder = metrics.metrics_recorder
 
 
 def record(
-    metric_name: metric_types.MetricType or str,
+    metric_name: metric_types.MetricType or str,  # pyrefly: ignore[invalid-annotation]
     value: int | float,
     step: int | None = None,
     labels: dict[str, str] | None = None,

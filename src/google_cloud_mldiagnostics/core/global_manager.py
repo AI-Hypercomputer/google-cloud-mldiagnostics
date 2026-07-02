@@ -46,18 +46,18 @@ class GlobalRunManager:
         if cls._instance is None:
           cls._instance = super(GlobalRunManager, cls).__new__(cls)
           cls._instance._initialized = False
-          cls._instance._ml_run: Optional[mlrun_types.MLRun] = None
-          cls._instance._current_logging_client: Optional[
+          cls._instance._ml_run: Optional[mlrun_types.MLRun] = None  # pyrefly: ignore[bad-assignment]
+          cls._instance._current_logging_client: Optional[  # pyrefly: ignore[bad-assignment]
               logging_client.LoggingClient
           ] = None
-          cls._instance._control_plane_client: Optional[
+          cls._instance._control_plane_client: Optional[  # pyrefly: ignore[bad-assignment]
               control_plane_client.ControlPlaneClient
           ] = None
-          cls._instance._timer_pt_creation: threading.Timer | None = None
-          cls._instance._pt_creation_start_time: float | None = None
-          cls._instance._timer_ps_creation: threading.Timer | None = None
-          cls._instance._ps_creation_start_time: float | None = None
-          cls._instance._profiler_target: Optional[str] = None
+          cls._instance._timer_pt_creation: threading.Timer | None = None  # pyrefly: ignore[bad-assignment]
+          cls._instance._pt_creation_start_time: float | None = None  # pyrefly: ignore[bad-assignment]
+          cls._instance._timer_ps_creation: threading.Timer | None = None  # pyrefly: ignore[bad-assignment]
+          cls._instance._ps_creation_start_time: float | None = None  # pyrefly: ignore[bad-assignment]
+          cls._instance._profiler_target: Optional[str] = None  # pyrefly: ignore[bad-assignment]
     return cls._instance
 
   def __init__(
@@ -492,7 +492,7 @@ class GlobalRunManager:
         resp = report_function(
             ml_run_id=self._ml_run.name,
             profiler_session_id=session_id,
-            gsc_file_path=self._ml_run.gcs_path + "/" + session_id,
+            gsc_file_path=self._ml_run.gcs_path + "/" + session_id,  # pyrefly: ignore[unsupported-operation]
             profiler_target=self._profiler_target,
             start_time=start_time,
             end_time=end_time,

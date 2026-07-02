@@ -227,22 +227,22 @@ class ControlPlaneClient:
     payload = {"displayName": display_name, "name": name}
 
     if configs:
-      payload["configs"] = configs
+      payload["configs"] = configs  # pyrefly: ignore[bad-assignment]
 
     if artifacts:
-      payload["artifacts"] = artifacts
+      payload["artifacts"] = artifacts  # pyrefly: ignore[bad-assignment]
 
     if run_group:
       payload["runSet"] = run_group
 
     if labels:
-      payload["labels"] = labels
+      payload["labels"] = labels  # pyrefly: ignore[bad-assignment]
 
     if run_phase:
       payload["runPhase"] = run_phase
 
     if tools:
-      payload["tools"] = tools
+      payload["tools"] = tools  # pyrefly: ignore[bad-assignment]
 
     if orchestrator:
       payload["orchestrator"] = orchestrator
@@ -262,7 +262,7 @@ class ControlPlaneClient:
         creation_timestamp = workload_details.get("creation-timestamp")
         if creation_timestamp:
           gke_workload_details["createTime"] = creation_timestamp
-        payload["workloadDetails"] = {"gke": gke_workload_details}
+        payload["workloadDetails"] = {"gke": gke_workload_details}  # pyrefly: ignore[bad-assignment]
 
     # Sanitize the name for machineLearningRunId
     sanitized_name = host_utils.sanitize_identifier(name)

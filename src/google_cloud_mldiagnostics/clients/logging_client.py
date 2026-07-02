@@ -167,7 +167,7 @@ class LoggingClient:
           ):
             hostname = labels["hostname"]
             accelerator_type = labels["accelerator_type"]
-            payload["accelerator_labels"] = [
+            payload["accelerator_labels"] = [  # pyrefly: ignore[unsupported-operation]
                 f"{hostname}-{accelerator_type}{i}"
                 for i, _ in enumerate(payload["values"])
             ]

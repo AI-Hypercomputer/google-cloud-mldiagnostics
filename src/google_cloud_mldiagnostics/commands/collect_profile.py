@@ -210,12 +210,12 @@ def _collect_profile(
   print(f"Starting remote profile for {hosts} on {port}...")
 
   if session_name:
-    options["session_id"] = session_name
+    options["session_id"] = session_name  # pyrefly: ignore[bad-assignment]
   else:
     print("Session name not provided, xprof will use auto generated")
 
   if override_hostnames:
-    options["override_hostnames"] = _validate_hostnames(
+    options["override_hostnames"] = _validate_hostnames(  # pyrefly: ignore[bad-assignment]
         hosts, override_hostnames
     )
 

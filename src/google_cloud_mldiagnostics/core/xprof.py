@@ -133,7 +133,7 @@ class Xprof:
       )
       global_manager.GlobalRunManager.get_instance().create_or_update_profiler_session(
           create_new_session=create_new_session,
-          session_id=self._current_session_id,
+          session_id=self._current_session_id,  # pyrefly: ignore[bad-argument-type]
           start_time=self._start_time,
           end_time=self._end_time,
           session_phase=self._session_phase,
@@ -172,7 +172,7 @@ class Xprof:
       options.session_id = self._current_session_id
       self._start_time = time.time()
       self._end_time = None
-      jax.profiler.start_trace(self._gcs_profile_dir, profiler_options=options)
+      jax.profiler.start_trace(self._gcs_profile_dir, profiler_options=options)  # pyrefly: ignore[bad-argument-type]
       self._session_phase = "ACTIVE"
       self._is_profiling = True
 
@@ -224,7 +224,7 @@ class Xprof:
     options.session_id = self._current_session_id
 
     self._trace_context_manager = jax.profiler.trace(
-        self._gcs_profile_dir, profiler_options=options
+        self._gcs_profile_dir, profiler_options=options  # pyrefly: ignore[bad-argument-type]
     )
     logger.info("Entering xprof context for: %s", self._gcs_profile_dir)
     try:
