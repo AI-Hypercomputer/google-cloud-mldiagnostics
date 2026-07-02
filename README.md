@@ -39,13 +39,13 @@
 
 ## Overview
 
-**Note:** Google Cloud ML Diagnostics supports only JAX on Google Cloud TPUs today.
+**Note:** Google Cloud ML Diagnostics supports JAX on Google Cloud TPUs and GPUs today.
 
 Google Cloud ML Diagnostics is an end-to-end managed platform for optimizing
 and diagnosing AI/ML workloads on Google Cloud. The platform lets you collect
 and visualize all workload metrics, configs and profiles within a single
 platform. ML Diagnostics is applicable to both training and inference
-workloads, and is compatible with all orchestrators on TPU, including Google
+workloads, and is compatible with all orchestrators on TPU and GPU, including Google
 Kubernetes Engine and custom orchestrators.
 
 ML Diagnostics includes the following features:
@@ -576,10 +576,10 @@ for step in range(num_steps):
     ], step=step+1)
 ```
 
-There are some metrics that are automatically collected by SDK from libTPU,
-psutil and JAX libraries and the user does not need to write them:
+There are some metrics that are automatically collected by the SDK (from libTPU, pynvml, psutil, and JAX libraries) depending on the accelerator type:
 
-1. System metrics - TPU tensorcore utilization, TPU duty cycle, HBM utilization, Host CPU utilization, Host memory utilization
+1. **For TPUs**: TPU tensorcore utilization, TPU duty cycle, HBM utilization, Host CPU utilization, Host memory utilization.
+2. **For GPUs**: GPU utilization, GPU Tensor Core utilization, VRAM (HBM) utilization, Host CPU utilization, Host memory utilization.
 
 These system metrics will by default have “time” as the x-axis only.
 We also have some predefined key-value pairs for certain metrics so these can
@@ -648,7 +648,7 @@ XLA, Tensorflow) for profile collection so you can use the same profile capture
 code across all frameworks. All the profile sessions will be captured in the GCS
 bucket defined in the machine learning run.
 
-**Note:** Google Cloud ML Diagnostics primarily supports JAX on Google Cloud TPUs (support for other frameworks like vllm, sglang, Torch TPU, etc will come in the future).
+**Note:** Google Cloud ML Diagnostics supports JAX on Google Cloud TPUs and GPUs (support for other frameworks like vllm, sglang, Torch TPU, etc will come in the future).
 
 ```python
 # Support collection via APIs
@@ -714,6 +714,72 @@ prof.stop()
 
 So, for the typical case of collecting profiles on just host 0, the user will
 need to specify just index 0 in the list.
+
+### Multi-host JAX Initialization
+
+When running multi-host JAX workloads (such as GPU clusters or TPU
+multi-slice configurations), you must initialize the JAX distributed system
+to coordinate between hosts and avoid race conditions during startup.
+
+Unlike single-slice TPU setups where JAX automatically detects the
+coordinator setup, these environments require explicit configuration of the
+coordinator address, number of processes, and process ID.
+
+#### Option 1: Using Environment Variables (Recommended for general setups)
+
+You can configure this by setting the following environment variables on all hosts before running your script:
+
+*   `JAX_COORDINATOR_ADDRESS`: The IP address and port (e.g., `192.168.0.1:29400`) of the host with rank 0 (the coordinator).
+*   `JAX_NUM_PROCESSES`: The total number of hosts/nodes in the cluster.
+*   `JAX_PROCESS_ID`: The rank/ID of the current host (from `0` to `num_processes - 1`).
+
+In your Python script, initialize JAX:
+
+```python
+import jax
+
+# Initialize JAX distributed using the environment variables
+jax.distributed.initialize()
+```
+
+#### Option 2: Explicit Initialization (Recommended for GKE/JobSet)
+
+If you are deploying on GKE using **JobSet**, you can leverage Kubernetes environment variables (like `JOB_COMPLETION_INDEX` for the process ID) and internal Headless Service DNS for the coordinator address.
+
+Here is an example of how to initialize JAX in your training script:
+
+```python
+import os
+import logging
+import jax
+
+# 1. Determine process ID from Kubernetes JobSet completion index
+process_id = int(os.environ.get("JOB_COMPLETION_INDEX", "0"))
+
+# 2. Define the number of processes (matches JobSet replicatedJob replicas)
+num_processes = 2
+
+# 3. Define the coordinator address using the headless service DNS of the first pod (rank 0)
+# Format: <pod-name>.<service-name>.<namespace>.svc.cluster.local:<port>
+coordinator_address = "multihost-gpu-jobset-gpu-slice-0-0.multihost-gpu-jobset.default.svc.cluster.local:8471"
+
+logging.info(
+    f"Initializing JAX distributed: coordinator={coordinator_address}, "
+    f"num_processes={num_processes}, process_id={process_id}"
+)
+
+jax.distributed.initialize(
+    coordinator_address=coordinator_address,
+    num_processes=num_processes,
+    process_id=process_id,
+)
+```
+
+**Important:**
+*   You can choose any open port (e.g., `1234` or `8471`) for the JAX
+    distributed service, as long as it is available and does not conflict
+    with other services.
+*   Ensure that the coordinator DNS address is correctly resolvable from all pods in the JobSet.
 
 ### Enable On-Demand Profile Capture
 
@@ -790,6 +856,9 @@ RUN pip install --no-cache-dir \
 # Optional: For JAX/TPU workloads
 # RUN pip install --no-cache-dir "jax[tpu]" -f https://storage.googleapis.com/jax-releases/libtpu_releases.html && \
 #     pip install --no-cache-dir libtpu xprof
+
+# Optional: For JAX/GPU workloads (adjust CUDA version as needed)
+# RUN pip install --no-cache-dir "jax[cuda12]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
 
 # Add your application code
 COPY ./app /app
