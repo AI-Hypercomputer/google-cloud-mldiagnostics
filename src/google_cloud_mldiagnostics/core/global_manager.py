@@ -36,6 +36,7 @@ class GlobalRunManager:
   _instance: Optional["GlobalRunManager"] = None
   _lock = threading.RLock()
   _PROFILER_SESSION_CREATION_TIMEOUT_SEC = 20
+  _MAX_GET_ML_RUN_ATTEMPTS = 2
 
   def __new__(cls, *args, **kwargs) -> "GlobalRunManager":
     """Ensure only one instance is created (thread-safe singleton)."""
@@ -173,6 +174,9 @@ class GlobalRunManager:
 
           # Prepare default tools (XProf is commonly used)
           tools = [{"xprof": {}}]
+          serving_engine_val = ""
+          if mlrun.serving_engine != mlrun_types.ServingEngine.NONE:
+            serving_engine_val = mlrun.serving_engine.value.lower()
           # Create the ML run with mapped parameters
           try:
             response = self._control_plane_client.create_ml_run(
@@ -199,12 +203,7 @@ class GlobalRunManager:
                     ),
                     "accelerator_type": self._accelerator_type.value,
                     "framework": mlrun.framework.value.lower(),
-                    "serving_engine": (
-                        mlrun.serving_engine.value.lower()
-                        if mlrun.serving_engine
-                        != mlrun_types.ServingEngine.NONE
-                        else ""
-                    ),
+                    "serving_engine": serving_engine_val,
                 },
                 orchestrator=mlrun.orchestrator,
                 workload_details=mlrun.workload_details,
@@ -333,17 +332,34 @@ class GlobalRunManager:
         hostname = host_utils.get_hostname()
         workload_details = self._ml_run.workload_details or {}
         if not workload_details.get("targets", None):
-          resp = client.get_ml_run(self._ml_run.name)
-          workload_details = resp.get("workloadDetails", {})
-          self._ml_run.workload_details = workload_details
+          # Attempt to fetch targets, and if missing, try updating
+          # workload_details and fetch again as the backend might populate it.
+          for i in range(self._MAX_GET_ML_RUN_ATTEMPTS):
+            resp = client.get_ml_run(self._ml_run.name)
+            workload_details = resp.get("workloadDetails", {})
+            self._ml_run.workload_details = workload_details
 
-        if not workload_details.get("targets", None):
-          # TODO([INTERNAL]): Update ML Run to include targets details from GKE.
-          logger.error(
-              "No targets found in ML Run workload details, aborting session"
-              " creation."
-          )
-          return
+            if len(workload_details.get("targets", [])) > 0:
+              break
+
+            if i == 0:
+              logger.info(
+                  "No targets found in ML Run workload details, trying to"
+                  " update ML Run."
+              )
+              client.update_ml_run(
+                  name=self._ml_run.name,
+                  force=True,
+                  run_phase=mlrun_types.RunPhase.PHASE_ACTIVE.value,
+                  update_mask="workload_details"
+              )
+              continue
+
+            logger.error(
+                "No targets found in ML Run workload details even after"
+                " update ML Run, aborting session creation."
+            )
+            return
 
         profiler_target = None
         for target in workload_details.get("targets", []):

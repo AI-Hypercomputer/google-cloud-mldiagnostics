@@ -611,6 +611,7 @@ class ControlPlaneClient:
       display_name: Optional[str] = None,
       tools: Optional[List[Dict[str, Any]]] = None,
       artifacts: Optional[Dict[str, str]] = None,
+      update_mask: str = "*",
   ) -> Dict[str, Any]:
     """Update an existing ML run.
 
@@ -624,6 +625,7 @@ class ControlPlaneClient:
         display_name: Optional new display name for the run
         tools: Optional new list of tools to enable (e.g., XProf, NSys)
         artifacts: Optional new artifacts configuration (e.g., gcsPath)
+        update_mask: Update mask for the ML run
 
     Returns:
         Response from the API as a dictionary
@@ -641,6 +643,7 @@ class ControlPlaneClient:
             display_name=display_name,
             tools=tools,
             artifacts=artifacts,
+            update_mask=update_mask,
         )
       except requests.exceptions.HTTPError as e:
         logger.warning(
@@ -669,6 +672,7 @@ class ControlPlaneClient:
       display_name: Optional[str] = None,
       tools: Optional[List[Dict[str, Any]]] = None,
       artifacts: Optional[Dict[str, str]] = None,
+      update_mask: str = "*",
   ) -> Dict[str, Any]:
     """Attempt to update an existing ML run once."""
     payload = self.get_ml_run(name)
@@ -700,7 +704,7 @@ class ControlPlaneClient:
       payload.pop(field, None)
 
     run_url = f"{self.ml_runs_path}/{name}"
-    params = {"update_mask": "*"}
+    params = {"update_mask": update_mask}
 
     logger.debug(
         "Update ML Run request: url=%s, params=%s, json=%s",
