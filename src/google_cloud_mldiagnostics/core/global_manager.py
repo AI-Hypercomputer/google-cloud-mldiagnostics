@@ -207,6 +207,7 @@ class GlobalRunManager:
                 },
                 orchestrator=mlrun.orchestrator,
                 workload_details=mlrun.workload_details,
+                workload_targets=mlrun.workload_targets,
             )
             logger.info(
                 "Successfully created ML run: %s",

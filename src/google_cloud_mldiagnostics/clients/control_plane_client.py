@@ -203,6 +203,7 @@ class ControlPlaneClient:
       labels: Optional[Dict[str, str]] = None,
       orchestrator: Optional[str] = None,
       workload_details: Optional[Dict[str, Any]] = None,
+      workload_targets: Optional[List[Dict[str, Any]]] = None,
   ) -> Dict[str, Any]:
     """Create a new ML run using the Google Cloud API.
 
@@ -217,6 +218,7 @@ class ControlPlaneClient:
         labels: Custom labels for the run
         orchestrator: Orchestrator the workload is running on (e.g., GCE, GKE)
         workload_details: Details about the workload
+        workload_targets: Targets for the workload
 
     Returns:
         Response from the API as a dictionary
@@ -263,6 +265,19 @@ class ControlPlaneClient:
         if creation_timestamp:
           gke_workload_details["createTime"] = creation_timestamp
         payload["workloadDetails"] = {"gke": gke_workload_details}  # pyrefly: ignore[bad-assignment]
+      elif orchestrator == "GCE" and workload_details:
+        gce_workload_details = {
+            "id": workload_details["id"],
+            "display_name": workload_details["display_name"],
+            "create_time": workload_details["create_time"],
+        }
+        payload["workloadDetails"] = {"gce": gce_workload_details}  # pyrefly: ignore[bad-assignment]
+
+    if workload_targets:
+      if not payload.get("workloadDetails", None):
+        payload["workloadDetails"] = {}
+
+      payload["workloadDetails"]["targets"] = workload_targets  # pyrefly: ignore[bad-assignment]
 
     # Sanitize the name for machineLearningRunId
     sanitized_name = host_utils.sanitize_identifier(name)
@@ -419,7 +434,7 @@ class ControlPlaneClient:
     ) as response:
       try:
         response.raise_for_status()
-      except requests.exceptions.HTTPError as e:
+      except requests.exceptions.HTTPError:
         if response.status_code == 409:
           err_dict = ast.literal_eval(response.text)
           logger.info("error dict: %s", err_dict)

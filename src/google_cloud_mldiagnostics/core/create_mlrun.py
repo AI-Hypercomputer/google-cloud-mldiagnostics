@@ -73,8 +73,8 @@ def initialize_mlrun(
       name: The name of the run.
       environment: The environment to use for the control plane client
         (autopush, staging, prod).
-      on_demand_xprof: Whether to start an on-demand xprof profiling server.
-        If enabled, the port is set to 9999.
+      on_demand_xprof: Whether to start an on-demand xprof profiling server. If
+        enabled, the port is set to 9999.
       run_group: The run set this run belongs to.
       configs: Dictionary of configuration parameters.
       gcs_path: GCS path for storing run artifacts.
@@ -108,8 +108,8 @@ def initialize_mlrun(
 
   created_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
   run_phase = mlrun_types.RunPhase.PHASE_ACTIVE
-  workload_details = host_utils.get_workload_details()
   orchestrator = orchestrator_utils.detect_orchestrator()
+  workload_details = host_utils.get_workload_details(orchestrator)
 
   # Generate display name and name for the MLRun.
   # TODO: [INTERNAL] - Add support for non-GKE workloads.
@@ -125,12 +125,22 @@ def initialize_mlrun(
           " configuration, please see"
           " https://github.com/AI-Hypercomputer/google-cloud-mldiagnostics?tab=readme-ov-file#configure-gke-cluster."
       )
-    name = host_utils.get_identifier(workload_details)
+    name = host_utils.get_identifier(orchestrator, workload_details)
+  elif orchestrator == "GCE":
+    if not workload_details:
+      raise ValueError(
+          "Detected GCE environment but GCE workload details are missing."
+      )
+    name = host_utils.get_identifier(orchestrator, workload_details)
   else:
     name = name + "-" + str(datetime.datetime.now().strftime("%Y%m%d%H%M%S"))
 
   # sanitize the name and use it as the MLRun name for the control plane.
   sanitized_name = host_utils.sanitize_identifier(name)
+
+  workload_targets = host_utils.get_workload_targets(
+      orchestrator, workload_details
+  )
 
   ml_run = mlrun_types.MLRun(
       run_group=run_group,  # pyrefly: ignore[bad-argument-type]
@@ -142,6 +152,7 @@ def initialize_mlrun(
       run_phase=run_phase,
       created_at=created_at,
       workload_details=workload_details,
+      workload_targets=workload_targets,
       orchestrator=orchestrator,
       display_name=display_name,
       on_demand_xprof=on_demand_xprof,
@@ -270,15 +281,14 @@ def initialize_mlrun(
     xprof_port = 9999
     # LINT.ThenChange(//depot/google3/cloud/hosted/hypercomputecluster/clh/diagnostics/consumerservice/profilersession.go:defaultCapturePort)
     from google_cloud_mldiagnostics.core import xprof  # pylint: disable=g-import-not-at-top
+
     xprof.start_on_demand_xprof(port=xprof_port)
     run_phase_monitor.register_cleanup_handler(xprof.stop_on_demand_xprof)
 
   return ml_run
 
 
-def create_gke_url(
-    region: str, project: str, name: str
-) -> str:
+def create_gke_url(region: str, project: str, name: str) -> str:
   """Creates GKE detail view URL."""
   return f"https://console.cloud.google.com/kubernetes/aiml/run/{region}/{name}?project={project}"
 

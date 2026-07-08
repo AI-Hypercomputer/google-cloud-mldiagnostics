@@ -25,8 +25,8 @@ from typing import Any
 
 from google_cloud_mldiagnostics.custom_types import metric_types
 from google_cloud_mldiagnostics.custom_types import mlrun_types
+from google_cloud_mldiagnostics.utils import gcp
 import requests
-
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +94,37 @@ def _get_gke_workload_details() -> dict[str, Any] | None:
   if all(not v for v in details.values()):
     return None
 
+  return details
+
+
+def _get_gce_workload_details() -> dict[str, Any] | None:
+  """Returns workload details if available, otherwise None."""
+  details = {
+      "id": get_instance_id(),
+      "display_name": get_hostname(),
+      "create_time": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+  }
+
+  return details
+
+
+def _gce_workload_targets(
+    workload_details: dict[str, Any] | None,
+) -> list[dict[str, Any]] | None:
+  """Returns workload targets if available, otherwise None."""
+  if not workload_details:
+    return None
+  display_name = workload_details.get("display_name", "")
+  instance_id = workload_details.get("id", "")
+  if not display_name and not instance_id:
+    return None
+  details = [{
+      "display_name": display_name,
+      "instance_id": instance_id,
+      "hostname": display_name,
+      "zone": gcp.get_instance_zone(),
+      "state": "RUNNING",
+  }]
   return details
 
 
@@ -183,6 +214,28 @@ def _gke_run_identifier(workload_details: dict[str, Any]) -> str:
   return _get_sha256_hash(identifier)
 
 
+def _gce_run_identifier(workload_details: dict[str, Any]) -> str:
+  """Returns the unique identifier for the gce workload."""
+  if not workload_details:
+    raise ValueError(
+        "Could not generate GCE workload identifier due to missing workload"
+        " details."
+    )
+  required_keys = ["id", "display_name", "create_time"]
+  missing_keys = [k for k in required_keys if not workload_details.get(k)]
+  if missing_keys:
+    raise ValueError(
+        "Could not generate GCE workload identifier due to missing properties:"
+        f" {', '.join(missing_keys)}."
+    )
+  identifier = (
+      f"{workload_details['id']}"
+      f"_{workload_details['display_name']}"
+      f"_{workload_details['create_time']}"
+  )
+  return _get_sha256_hash(identifier)
+
+
 # Public functions
 def get_hostname() -> str:
   """Returns hostname of the current machine."""
@@ -216,7 +269,9 @@ def _import_jax_host_module():
   if _jax_host_module_cache is not None:
     return _jax_host_module_cache
 
-  from google_cloud_mldiagnostics.utils.jax_utils import jax_host  # pylint: disable=g-import-not-at-top
+  from google_cloud_mldiagnostics.utils.jax_utils import (  # pylint: disable=g-import-not-at-top
+      jax_host,
+  )
 
   _jax_host_module_cache = jax_host
   return _jax_host_module_cache
@@ -227,7 +282,10 @@ def get_process_index(
     serving_engine: mlrun_types.ServingEngine = mlrun_types.ServingEngine.NONE,
 ) -> int:
   """Returns host index."""
-  if framework == mlrun_types.Framework.JAX and serving_engine == mlrun_types.ServingEngine.NONE:
+  if (
+      framework == mlrun_types.Framework.JAX
+      and serving_engine == mlrun_types.ServingEngine.NONE
+  ):
     if os.environ.get("MLRUN_SKIP_LIBTPU", "False").lower() != "true":
       # TODO: [INTERNAL] - Add support for non-jax workloads.
       return _import_jax_host_module().get_jax_process_index()
@@ -248,8 +306,11 @@ def get_accelerator_type(
     serving_engine: mlrun_types.ServingEngine = mlrun_types.ServingEngine.NONE,
 ) -> metric_types.AcceleratorType:
   """Returns the accelerator type of the current host."""
-  # 1. Fall back to inspecting JAX devices first if framework is JAX and serving_engine is NONE.
-  if framework == mlrun_types.Framework.JAX and serving_engine == mlrun_types.ServingEngine.NONE:
+  # 1. Inspect JAX devices first if framework is JAX and engine is NONE.
+  if (
+      framework == mlrun_types.Framework.JAX
+      and serving_engine == mlrun_types.ServingEngine.NONE
+  ):
     if os.environ.get("MLRUN_SKIP_LIBTPU", "False").lower() != "true":
       try:
         jax_acc = _import_jax_host_module().get_accelerator_type()
@@ -276,6 +337,7 @@ def get_accelerator_type(
 
   # 3. Check device nodes & libraries
   import glob  # pylint: disable=g-import-not-at-top
+
   if (
       glob.glob("/dev/accel/tpu_*")
       or os.path.exists("/dev/accel")
@@ -297,17 +359,34 @@ def is_master_host(
   return get_process_index(framework, serving_engine) == 0
 
 
-def get_workload_details() -> dict[str, Any] | None:
+def get_workload_details(orchestrator: str = "GKE") -> dict[str, Any] | None:
   """Returns workload details if available, otherwise None."""
   # TODO: [INTERNAL] - Add support for non-GKE workloads.
+  if orchestrator == "GCE":
+    return _get_gce_workload_details()
+
   return _get_gke_workload_details()
 
 
-def get_identifier(workload_details: dict[str, Any]) -> str:
+def get_identifier(
+    orchestrator: str = "GKE", workload_details: dict[str, Any] | None = None
+) -> str:
   """Returns a unique SHA-256 identifier for the workload."""
   # TODO: [INTERNAL] - Add support for non-GKE workloads.
+  if orchestrator == "GCE":
+    return _gce_run_identifier(workload_details)
 
   return _gke_run_identifier(workload_details)
+
+
+def get_workload_targets(
+    orchestrator: str = "GKE", workload_details: dict[str, Any] | None = None
+) -> list[dict[str, Any]] | None:
+  # TODO: [INTERNAL] - Add support for non-GKE workloads.
+  if orchestrator == "GCE":
+    return _gce_workload_targets(workload_details)
+
+  return None
 
 
 def sanitize_identifier(identifier: str) -> str:
@@ -316,6 +395,7 @@ def sanitize_identifier(identifier: str) -> str:
   # Remove leading/trailing hyphens
   sanitized_id = sanitized_id.strip("-")
   return sanitized_id
+
 
 def effective_session_id(session_id: str | None = None) -> str:
   """Returns the effective session ID."""

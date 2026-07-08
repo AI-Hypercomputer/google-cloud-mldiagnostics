@@ -51,6 +51,7 @@ class RunPhaseMonitor:
 
   def __init__(self):
     self._monitoring_started = False
+    self._ml_run_failed = False
     self._original_excepthook = sys.excepthook
     self._lock = threading.Lock()
     self._manager = global_manager.get_global_run_manager()
@@ -78,6 +79,7 @@ class RunPhaseMonitor:
         )
         self.exit_cleanup()
         self.update_ml_run_with_phase(mlrun_types.RunPhase.PHASE_FAILED)
+        self._ml_run_failed = True
         if self._original_excepthook:
           self._original_excepthook(exc_type, exc_val, exc_tb)
 
@@ -87,7 +89,8 @@ class RunPhaseMonitor:
       if self._monitoring_started:
         logger.info("Program exiting normally. Sending 'COMPLETED' signal.")
         self.exit_cleanup()
-        self.update_ml_run_with_phase(mlrun_types.RunPhase.PHASE_COMPLETED)
+        if not self._ml_run_failed:
+          self.update_ml_run_with_phase(mlrun_types.RunPhase.PHASE_COMPLETED)
 
   def _handle_sigterm(self, signum, unused_frame) -> None:
     """Handles SIGTERM signal for graceful shutdown.
@@ -106,6 +109,7 @@ class RunPhaseMonitor:
       try:
         self.exit_cleanup()
         self.update_ml_run_with_phase(mlrun_types.RunPhase.PHASE_FAILED)
+        self._ml_run_failed = True
       except Exception:  # pylint: disable=broad-except-catching
         logger.exception("Exception during SIGTERM handler execution.")
       logger.info(
@@ -135,6 +139,7 @@ class RunPhaseMonitor:
       atexit.register(self._on_normal_exit)
       signal.signal(signal.SIGTERM, self._handle_sigterm)
       self._monitoring_started = True
+      self._ml_run_failed = False
       logger.info("Run phase monitoring is active.")
 
   def exit_cleanup(self):

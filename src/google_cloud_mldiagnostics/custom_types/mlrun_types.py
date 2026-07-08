@@ -33,7 +33,7 @@ class RunPhase(enum.Enum):
   # Run is failed.
   PHASE_FAILED = "FAILED"
 
-# TODO([INTERNAL]): Remove vLLM from the framework enum and create separate serving engine enum.
+# TODO([INTERNAL]): Separate vLLM into a serving engine enum.
 class Framework(enum.Enum):
   JAX = "JAX"
   PYTORCH = "PYTORCH"
@@ -103,6 +103,7 @@ class MLRun:
   # Fields computed during initialization (excluded from __init__)
   created_at: str | None = None
   workload_details: dict[str, Any] | None = None
+  workload_targets: list[dict[str, Any]] | None = None
   orchestrator: str | None = None
   display_name: str = ""
   on_demand_xprof: bool = False
