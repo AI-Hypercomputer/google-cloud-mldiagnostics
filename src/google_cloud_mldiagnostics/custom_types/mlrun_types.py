@@ -107,7 +107,7 @@ class MLRun:
   orchestrator: str | None = None
   display_name: str = ""
   on_demand_xprof: bool = False
-  log_system_metrics: bool = False
+  log_system_metrics: bool = True
   environment: str = ""
   framework: Framework = Framework.JAX
   serving_engine: ServingEngine = ServingEngine.NONE

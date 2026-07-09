@@ -118,7 +118,7 @@ class _MetricsRecorder:
       self,
       item: Mapping[str, Any],
       is_master_host: bool,
-      log_system_metrics: bool = False,
+      log_system_metrics: bool = True,
   ) -> dict[str, Any] | None:
     """Processes a single metric item from the queue.
 
