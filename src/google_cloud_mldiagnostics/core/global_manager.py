@@ -152,6 +152,22 @@ class GlobalRunManager:
       artifacts = {"gcsPath": mlrun.gcs_path}
 
     tools = [{"xprof": {}}]
+    labels = {
+        "created_by": "diagon_sdk",
+        "create-tool-mode": "regular",
+        "diagon_sdk_version": _version.get_version().replace(".", "-"),
+        "on_demand_xprof": "enabled" if mlrun.on_demand_xprof else "disabled",
+        "sdk_report_system_metrics": (
+            "true" if mlrun.log_system_metrics else "false"
+        ),
+        "accelerator_type": self._accelerator_type.value,
+        "framework": mlrun.framework.value.lower(),
+        "serving_engine": (
+            mlrun.serving_engine.value.lower()
+            if mlrun.serving_engine != mlrun_types.ServingEngine.NONE
+            else ""
+        ),
+    }
     try:
       response = self._control_plane_client.create_ml_run(
           name=mlrun.name,
@@ -161,26 +177,7 @@ class GlobalRunManager:
           configs=mlrun.configs,
           tools=tools,
           artifacts=artifacts,
-          labels={
-              "created_by": "diagon_sdk",
-              "create-tool-mode": "regular",
-              "diagon_sdk_version": (
-                  _version.get_version().replace(".", "-")
-              ),
-              "on_demand_xprof": (
-                  "enabled" if mlrun.on_demand_xprof else "disabled"
-              ),
-              "sdk_report_system_metrics": (
-                  "true" if mlrun.log_system_metrics else "false"
-              ),
-              "accelerator_type": self._accelerator_type.value,
-              "framework": mlrun.framework.value.lower(),
-              "serving_engine": (
-                  mlrun.serving_engine.value.lower()
-                  if mlrun.serving_engine != mlrun_types.ServingEngine.NONE
-                  else ""
-              ),
-          },
+          labels=labels,
           orchestrator=mlrun.orchestrator,
           workload_details=mlrun.workload_details,
           workload_targets=mlrun.workload_targets,
@@ -206,6 +203,8 @@ class GlobalRunManager:
             tools=tools,
             artifacts=artifacts,
             run_phase=mlrun_types.RunPhase.PHASE_ACTIVE.value,
+            labels=labels,
+            configs=mlrun.configs,
         )
       else:
         logger.error("Failed to create ML run: %s", e_create)

@@ -324,6 +324,8 @@ class ControlPlaneClient:
               tools=tools,
               artifacts=artifacts,
               run_phase=run_phase,
+              labels=labels,
+              configs=configs,
           )
         raise
     else:
@@ -626,6 +628,8 @@ class ControlPlaneClient:
       display_name: Optional[str] = None,
       tools: Optional[List[Dict[str, Any]]] = None,
       artifacts: Optional[Dict[str, str]] = None,
+      labels: Optional[Dict[str, str]] = None,
+      configs: Optional[Dict[str, Any]] = None,
       update_mask: str = "*",
   ) -> Dict[str, Any]:
     """Update an existing ML run.
@@ -640,6 +644,8 @@ class ControlPlaneClient:
         display_name: Optional new display name for the run
         tools: Optional new list of tools to enable (e.g., XProf, NSys)
         artifacts: Optional new artifacts configuration (e.g., gcsPath)
+        labels: Optional new dictionary of labels to merge
+        configs: Optional new dictionary of configs to merge
         update_mask: Update mask for the ML run
 
     Returns:
@@ -658,6 +664,8 @@ class ControlPlaneClient:
             display_name=display_name,
             tools=tools,
             artifacts=artifacts,
+            labels=labels,
+            configs=configs,
             update_mask=update_mask,
         )
       except requests.exceptions.HTTPError as e:
@@ -687,6 +695,8 @@ class ControlPlaneClient:
       display_name: Optional[str] = None,
       tools: Optional[List[Dict[str, Any]]] = None,
       artifacts: Optional[Dict[str, str]] = None,
+      labels: Optional[Dict[str, str]] = None,
+      configs: Optional[Dict[str, Any]] = None,
       update_mask: str = "*",
   ) -> Dict[str, Any]:
     """Attempt to update an existing ML run once."""
@@ -710,6 +720,39 @@ class ControlPlaneClient:
     if artifacts is not None and payload.get("artifacts") != artifacts:
       payload["artifacts"] = artifacts
       need_update = True
+
+    if labels is not None:
+      existing_labels = payload.get("labels")
+      if not isinstance(existing_labels, dict):
+        existing_labels = {}
+      labels_modified = False
+      is_foreign_run = (
+          "created_by" in existing_labels
+          and existing_labels.get("created_by") != "diagon_sdk"
+      )
+      for key, value in labels.items():
+        if key in ("created_by", "create-tool-mode"):
+          if key in existing_labels or is_foreign_run:
+            continue
+        if existing_labels.get(key) != value:
+          existing_labels[key] = value
+          labels_modified = True
+      if labels_modified:
+        payload["labels"] = existing_labels
+        need_update = True
+
+    if configs is not None:
+      existing_configs = payload.get("configs")
+      if not isinstance(existing_configs, dict):
+        existing_configs = {}
+      configs_modified = False
+      for key, value in configs.items():
+        if existing_configs.get(key) != value:
+          existing_configs[key] = value
+          configs_modified = True
+      if configs_modified:
+        payload["configs"] = existing_configs
+        need_update = True
 
     if not need_update:
       return payload
