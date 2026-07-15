@@ -279,7 +279,7 @@ def initialize_mlrun(
   if on_demand_xprof:
     # LINT.IfChange(xprof_port)
     xprof_port = 9999
-    # LINT.ThenChange(//depot/google3/cloud/hosted/hypercomputecluster/clh/diagnostics/consumerservice/profilersession.go:defaultCapturePort)
+    # LINT.ThenChange(//depot/google3/cloud/hosted/hypercomputecluster/clh/diagnostics/consumerservice/utils.go:DefaultCapturePort)
     from google_cloud_mldiagnostics.core import xprof  # pylint: disable=g-import-not-at-top
 
     xprof.start_on_demand_xprof(port=xprof_port)
