@@ -89,6 +89,15 @@ parser.add_argument(
     help="Comma separated list of hostnames to use for trace filenames.",
     type=str,
 )
+parser.add_argument(
+    "--use_system_hostname",
+    action="store_true",
+    default=False,
+    help=(
+        "Use system hostname for trace filenames instead of IP address."
+        " Mutually exclusive with --override_hostnames."
+    ),
+)
 
 
 def _import_xprof():
@@ -183,6 +192,7 @@ def _collect_profile(
     device_tracer_level: int,
     python_tracer_level: int,
     override_hostnames: str,
+    use_system_hostname: bool,
 ):
   """Collects a profile from the specified hosts and ports.
 
@@ -198,12 +208,20 @@ def _collect_profile(
     python_tracer_level: The level of Python tracing.
     override_hostnames: Comma-separated list of hostnames to use for trace
       filenames.
+    use_system_hostname: If True, use the system hostname for trace filenames
+      instead of the IP address.
   """
   options = {
       "host_tracer_level": host_tracer_level,
       "device_tracer_level": device_tracer_level,
       "python_tracer_level": python_tracer_level,
   }
+
+  if use_system_hostname and override_hostnames:
+    raise ValueError(
+        "--use_system_hostname and --override_hostnames are mutually"
+        " exclusive. Specify only one."
+    )
 
   # This script will be used from GKE so we print to guarntee that output
   # will have this messages without additional configuration.
@@ -214,7 +232,9 @@ def _collect_profile(
   else:
     print("Session name not provided, xprof will use auto generated")
 
-  if override_hostnames:
+  if use_system_hostname:
+    options["use_system_hostname"] = True  # pyrefly: ignore[bad-assignment]
+  elif override_hostnames:
     options["override_hostnames"] = _validate_hostnames(  # pyrefly: ignore[bad-assignment]
         hosts, override_hostnames
     )
@@ -251,6 +271,7 @@ def main(args: List[str] | None):
       device_tracer_level=parsed_args.device_tracer_level,
       python_tracer_level=parsed_args.python_tracer_level,
       override_hostnames=parsed_args.override_hostnames,
+      use_system_hostname=parsed_args.use_system_hostname,
   )
 
 
