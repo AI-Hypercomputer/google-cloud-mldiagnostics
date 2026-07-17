@@ -20,6 +20,7 @@ Creates MLRun, run vllm, and finish MLRun.
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import signal
@@ -63,12 +64,71 @@ parser.add_argument(
 
 
 
+def _update_torch_profiler_args(args: list[str], run_name: str) -> list[str]:
+  """Appends dynamic MLRun ID subdirectory to profiler target paths."""
+  def append_suffix(path: str) -> str:
+    return f"{path.rstrip('/')}/{run_name}/plugins/profile/"
+
+  # If '--' is first, keep it aside to prepend later.
+  has_leading_dashdash = False
+  if args and args[0] == "--":
+    has_leading_dashdash = True
+    parse_args = args[1:]
+  else:
+    parse_args = args
+
+  # If there is another '--' in parse_args, separate them.
+  if "--" in parse_args:
+    idx = parse_args.index("--")
+    real_parse_args = parse_args[:idx]
+    post_args = parse_args[idx:]
+  else:
+    real_parse_args = parse_args
+    post_args = []
+
+  # Create a helper parser to parse only the profiler arguments.
+  parser = argparse.ArgumentParser(add_help=False)
+  parser.add_argument("--profiler-config", dest="profiler_config", type=str)
+  parser.add_argument(
+      "--profiler-config.torch_profiler_dir",
+      dest="torch_profiler_dir",
+      type=str,
+  )
+
+  parsed, remaining = parser.parse_known_args(real_parse_args)
+  new_args = list(remaining)
+
+  if parsed.torch_profiler_dir is not None:
+    updated_dir = append_suffix(parsed.torch_profiler_dir)
+    new_args.append(f"--profiler-config.torch_profiler_dir={updated_dir}")
+
+  if parsed.profiler_config is not None:
+    try:
+      config_dict = json.loads(parsed.profiler_config)
+      if isinstance(config_dict, dict) and "torch_profiler_dir" in config_dict:
+        config_dict["torch_profiler_dir"] = append_suffix(
+            config_dict["torch_profiler_dir"]
+        )
+        new_args.append(f"--profiler-config={json.dumps(config_dict)}")
+      else:
+        new_args.append(f"--profiler-config={parsed.profiler_config}")
+    except json.JSONDecodeError:
+      new_args.append(f"--profiler-config={parsed.profiler_config}")
+
+  result = new_args + post_args
+  if has_leading_dashdash:
+    result.insert(0, "--")
+  return result
+
+
 def main(args: List[str] | None):
   """Core main execution method for run_vllm wrapper."""
   diagon_args, rest_args = parser.parse_known_args(args)
 
   logging.basicConfig(level=logging.DEBUG)
-  logger.info(">>> RUN_VLLM.PY VERSION: VERIFYING_BACKGROUND_THREAD_LOGGER_V1 <<<")
+  logger.info(
+      ">>> RUN_VLLM.PY VERSION: VERIFYING_BACKGROUND_THREAD_LOGGER_V1 <<<"
+  )
 
   # 1. Update the parent environment for the current process
   os.environ["FORCE_MASTER_HOST"] = "True"
@@ -102,6 +162,16 @@ def main(args: List[str] | None):
     logger.info("Setting PHASED_PROFILING_DIR to: %s", phased_prof_dir)
     vllm_env["PHASED_PROFILING_DIR"] = phased_prof_dir
 
+  base_torch_profiler_dir = os.environ.get("VLLM_TORCH_PROFILER_DIR")
+  if base_torch_profiler_dir:
+    torch_prof_dir = (
+        f"{base_torch_profiler_dir.rstrip('/')}/{run.name}/plugins/profile/"
+    )
+    logger.info("Setting VLLM_TORCH_PROFILER_DIR to: %s", torch_prof_dir)
+    vllm_env["VLLM_TORCH_PROFILER_DIR"] = torch_prof_dir
+
+  rest_args = _update_torch_profiler_args(rest_args, run.name)
+
 
   logger.info("Running vllm with args: %s", " ".join(rest_args))
 
@@ -119,7 +189,7 @@ def main(args: List[str] | None):
           logger.warning("Timed out waiting for child process. Killing it...")
           vllm_proc.kill()
         logger.info("Child process exited with code %s", vllm_proc.returncode)
-    except Exception as e:  # pylint: disable=broad-exception-caught
+    except OSError:
       logger.exception("Error in sigterm_handler:")
     finally:
       exit_status = (
