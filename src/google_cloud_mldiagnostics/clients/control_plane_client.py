@@ -88,8 +88,20 @@ class ControlPlaneClient:
     self.base_url = base_url
     self.ml_runs_path = f"{base_url}/projects/{project_id}/locations/{location}/machineLearningRuns"
 
-    # Initialize Google Cloud credentials
-    self.credentials, _ = google.auth.default()
+    # Initialize Google Cloud credentials.
+    #
+    # Request the cloud-platform scope explicitly. Some credential types do not
+    # carry an implicit scope -- notably external_account (Workload Identity
+    # Federation) credentials, e.g. a GKE workload authenticating as a service
+    # account via WIF. With such a credential, google.auth.default() with no
+    # scopes yields an unscoped credential, and the subsequent STS token
+    # exchange / service-account impersonation is malformed, so the control
+    # plane rejects every request with HTTP 400 INVALID_ARGUMENT. Passing the
+    # scope explicitly makes token minting well-formed for both user ADC and
+    # external_account credentials.
+    self.credentials, _ = google.auth.default(
+        scopes=["https://www.googleapis.com/auth/cloud-platform"]
+    )
 
   def _get_access_token(self) -> str:
     """Get Google Cloud access token for authentication."""
