@@ -57,7 +57,7 @@ def initialize_mlrun(
     name: str,
     environment: str,
     on_demand_xprof: bool,
-    log_system_metrics: bool = True,
+    log_system_metrics: bool = False,
     run_group: str | None = None,
     configs: Mapping[str, Any] | None = None,
     gcs_path: str | None = None,

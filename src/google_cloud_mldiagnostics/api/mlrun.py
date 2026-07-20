@@ -61,7 +61,7 @@ def machinelearning_run(
     region: str | None = "us-central1",
     metrics_record_interval_sec: float = 10.0,
     on_demand_xprof: bool = False,
-    log_system_metrics: bool = True,
+    log_system_metrics: bool = False,
     environment: str = "prod",
     framework: mlrun_types.Framework = mlrun_types.Framework.JAX,
     serving_engine: mlrun_types.ServingEngine = mlrun_types.ServingEngine.NONE,
@@ -86,7 +86,7 @@ def machinelearning_run(
         default, on-demand xprof is not enabled. If enabled, the port is set to
         9999.
       log_system_metrics: Whether to log system metrics to Cloud Logging. By
-        default, system metrics are logged to Cloud Logging.
+        default, system metrics are not logged to Cloud Logging.
       environment: The environment to use for the control plane client
         (autopush, staging, prod). Default is prod.
       framework: The framework used for the ML run. Default is JAX.
