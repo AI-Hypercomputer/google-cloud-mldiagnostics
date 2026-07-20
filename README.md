@@ -766,6 +766,27 @@ In both Cluster Director and GKE, you will find the following pages:
    metrics. You can also view these metrics Cloud Logging under Logging > Logs
    Explorer. Metrics recorded via `metrics.record()` are written as log entries
    and can be filtered or used to create log-based metrics.
+
+   > **Prerequisite — enable Log Analytics on the `_Default` log bucket.** The
+   > model-metrics and performance-metrics time series charts render their data
+   > with a Log Analytics query against the project's `_Default` log bucket. If
+   > Log Analytics is not enabled on that bucket, these charts fail (the widget
+   > shows a generic "Something went wrong in the backend" / "0 time series"),
+   > even though the metric data is present in Cloud Logging and Profiles /
+   > system metrics render fine. Enable it once per project (non-destructive
+   > upgrade — existing logs stay queryable, no added cost, cannot be disabled):
+   >
+   > ```bash
+   > gcloud logging buckets update _Default --location=global \
+   >   --enable-analytics --project=PROJECT_ID
+   > ```
+   >
+   > This requires the `logging.buckets.update` permission (for example
+   > `roles/logging.configWriter`).
+   >
+   > **Note:** Log Analytics does not backfill. Only logs ingested *after* it is
+   > enabled are queryable, so runs that completed before enabling it will still
+   > show empty charts — launch a new run to verify.
 4. Profiles tab with all profile sessions (programmatic or on-demand) for that particular run, with links to the Xprof viewer (Xprof UI will open in a separate browser tab). In this profiles tab, you can also capture an on-demand profile session directly from the UI.
 
 ### Package Workload with SDK with Dockerfile for GKE
