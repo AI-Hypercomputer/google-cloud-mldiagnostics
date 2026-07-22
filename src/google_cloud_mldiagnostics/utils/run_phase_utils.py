@@ -21,12 +21,14 @@ and reports the application's final status (e.g., FAILED, COMPLETED) to a
 control plane.
 """
 
+from __future__ import annotations
+
 import atexit
 import logging
 import signal
 import sys
 import threading
-from typing import Callable
+from typing import Callable, Optional
 
 from google_cloud_mldiagnostics.core import global_manager
 from google_cloud_mldiagnostics.custom_types import exceptions
@@ -42,12 +44,20 @@ class RunPhaseMonitor:
 
   _cleanup_handlers: list[Callable[[], None]] = []
   _cleanup_handlers_lock = threading.Lock()
+  _active_instance: Optional[RunPhaseMonitor] = None
+  _active_instance_lock = threading.Lock()
 
   @classmethod
   def register_cleanup_handler(cls, handler: Callable[[], None]):
     """Registers a function to be called on exit."""
     with cls._cleanup_handlers_lock:
       cls._cleanup_handlers.append(handler)
+
+  @classmethod
+  def get_active_monitor(cls) -> Optional[RunPhaseMonitor]:
+    """Gets the currently active RunPhaseMonitor instance."""
+    with cls._active_instance_lock:
+      return cls._active_instance
 
   def __init__(self):
     self._monitoring_started = False
@@ -118,6 +128,8 @@ class RunPhaseMonitor:
 
   def update_ml_run_with_phase(self, run_phase: mlrun_types.RunPhase):
     """Sends a signal to the control plane if on master host."""
+    if run_phase == mlrun_types.RunPhase.PHASE_FAILED:
+      self._ml_run_failed = True
     if (
         self._is_master_host
         and self._control_plane_client
@@ -140,6 +152,8 @@ class RunPhaseMonitor:
       signal.signal(signal.SIGTERM, self._handle_sigterm)
       self._monitoring_started = True
       self._ml_run_failed = False
+      with RunPhaseMonitor._active_instance_lock:
+        RunPhaseMonitor._active_instance = self
       logger.info("Run phase monitoring is active.")
 
   def exit_cleanup(self):

@@ -30,6 +30,7 @@ from typing import List
 
 from google_cloud_mldiagnostics.api import mlrun
 from google_cloud_mldiagnostics.custom_types import mlrun_types
+from google_cloud_mldiagnostics.utils import run_phase_utils
 
 logger = logging.getLogger(__name__)
 
@@ -192,6 +193,10 @@ def main(args: List[str] | None):
     except OSError:
       logger.exception("Error in sigterm_handler:")
     finally:
+      monitor = run_phase_utils.RunPhaseMonitor.get_active_monitor()
+      if monitor:
+        monitor.update_ml_run_with_phase(mlrun_types.RunPhase.PHASE_FAILED)
+        monitor.exit_cleanup()
       exit_status = (
           vllm_proc.returncode if (
               vllm_proc is not None and vllm_proc.returncode is not None
@@ -227,8 +232,12 @@ def main(args: List[str] | None):
 
   exit_code = vllm_proc.returncode if vllm_proc is not None else 1
   logger.info("vllm exit code %s", exit_code)
+  if exit_code != 0:
+    monitor = run_phase_utils.RunPhaseMonitor.get_active_monitor()
+    if monitor:
+      monitor.update_ml_run_with_phase(mlrun_types.RunPhase.PHASE_FAILED)
   return exit_code
 
 
 if __name__ == "__main__":
-  main(None)
+  sys.exit(main(None))
