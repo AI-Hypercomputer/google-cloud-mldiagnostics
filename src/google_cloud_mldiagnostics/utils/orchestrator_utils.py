@@ -15,7 +15,10 @@
 """Utility functions for identifying orchestrator."""
 
 import os
+
 import requests
+
+from google_cloud_mldiagnostics.custom_types import mlrun_types
 
 
 def detect_orchestrator():
@@ -45,8 +48,17 @@ def detect_orchestrator():
     if os.getenv('KUBERNETES_SERVICE_HOST') or os.path.exists(
         '/var/run/secrets/kubernetes.io/serviceaccount/token'
     ):
-      orchestrator = 'GKE'
+      orchestrator = mlrun_types.Orchestrator.GKE.value
+    elif (
+        os.getenv('SLURM_CLUSTER_NAME')
+        and os.getenv('SLURM_JOB_ID')
+        and (
+            os.getenv('SLURM_NODELIST')
+            or os.getenv('SLURM_JOB_START_TIME')
+        )
+    ):
+      orchestrator = mlrun_types.Orchestrator.SLURM.value
     else:
-      orchestrator = 'GCE'
+      orchestrator = mlrun_types.Orchestrator.GCE.value
 
   return orchestrator

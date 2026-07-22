@@ -111,7 +111,12 @@ class GlobalRunManager:
           environment=mlrun.environment,
       )
 
-      if not host_utils.is_master_host(mlrun.framework, mlrun.serving_engine):
+      if (
+          mlrun.orchestrator == mlrun_types.Orchestrator.GKE.value
+          and not host_utils.is_master_host(
+              mlrun.framework, mlrun.serving_engine
+          )
+      ):
         logger.info(
             "Skipping ML run initialization on control plane (run_group=%s,"
             " name=%s): Current host is not the master host.",
@@ -190,12 +195,10 @@ class GlobalRunManager:
         self._ml_run.name = response.get("name", "unknown").split("/")[-1]
 
     except requests.exceptions.HTTPError as e_create:
-      if (
-          e_create.response is not None
-          and e_create.response.status_code == 409
-      ):
+      if e_create.response is not None and e_create.response.status_code == 409:
         logger.info(
-            "ML run %r already exists. Updating existing run details.", mlrun.name
+            "ML run %r already exists. Updating existing run details.",
+            mlrun.name,
         )
         self._control_plane_client.update_ml_run(
             name=mlrun.name,
@@ -205,6 +208,7 @@ class GlobalRunManager:
             run_phase=mlrun_types.RunPhase.PHASE_ACTIVE.value,
             labels=labels,
             configs=mlrun.configs,
+            workload_targets=mlrun.workload_targets,
         )
       else:
         logger.error("Failed to create ML run: %s", e_create)
@@ -325,7 +329,8 @@ class GlobalRunManager:
                   name=self._ml_run.name,
                   force=True,
                   run_phase=mlrun_types.RunPhase.PHASE_ACTIVE.value,
-                  update_mask="workload_details"
+                  update_mask="workload_details",
+                  workload_targets=self._ml_run.workload_targets,
               )
               continue
 

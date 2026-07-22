@@ -35,6 +35,8 @@ from google_cloud_mldiagnostics.utils.gpu_utils import gpu_metric
 _METRICS_RECORDER_THREAD_LOCK = threading.Lock()
 _METRICS_RECORDER_THREAD_STARTED = False
 
+logger = logging.getLogger(__name__)
+
 
 def _create_metric_collector(
     metric_name: str,
@@ -75,6 +77,8 @@ def initialize_mlrun(
         (autopush, staging, prod).
       on_demand_xprof: Whether to start an on-demand xprof profiling server. If
         enabled, the port is set to 9999.
+      log_system_metrics: Whether to log system metrics to Cloud Logging. By
+        default, system metrics are logged to Cloud Logging.
       run_group: The run set this run belongs to.
       configs: Dictionary of configuration parameters.
       gcs_path: GCS path for storing run artifacts.
@@ -82,6 +86,7 @@ def initialize_mlrun(
       region: The Google Cloud region.
       metrics_record_interval_sec: The metrics record interval in seconds.
       framework: The framework used for the run.
+      serving_engine: The serving engine used for the run.
 
   Returns:
       The initialized ML run object.
@@ -112,7 +117,6 @@ def initialize_mlrun(
   workload_details = host_utils.get_workload_details(orchestrator)
 
   # Generate display name and name for the MLRun.
-  # TODO: [INTERNAL] - Add support for non-GKE workloads.
   display_name = name
   if orchestrator == "GKE":
     if not workload_details:
@@ -124,6 +128,12 @@ def initialize_mlrun(
           " diagon operator webhook enabled. For more details on GKE"
           " configuration, please see"
           " https://github.com/AI-Hypercomputer/google-cloud-mldiagnostics?tab=readme-ov-file#configure-gke-cluster."
+      )
+    name = host_utils.get_identifier(orchestrator, workload_details)
+  elif orchestrator == "SLURM":
+    if not workload_details:
+      raise ValueError(
+          "Detected Slurm environment but Slurm workload details are missing."
       )
     name = host_utils.get_identifier(orchestrator, workload_details)
   elif orchestrator == "GCE":
@@ -161,6 +171,8 @@ def initialize_mlrun(
       framework=framework,
       serving_engine=serving_engine,
   )
+
+  logger.debug("Initializing MLRun: %s", ml_run)
 
   # register the run to global manager.
   manager = global_manager.get_global_run_manager()
@@ -200,8 +212,9 @@ def initialize_mlrun(
         # already initialized.
         metric_collectors = []
         if log_system_metrics:
-          logging.info("System metrics logging is enabled.")
+          logger.debug("System metrics logging is enabled.")
           accelerator_type = config_utils.get_accelerator_type(framework)
+          logger.debug("Accelerator type: %s", accelerator_type)
           if accelerator_type == metric_types.AcceleratorType.GPU.value:
             metric_collectors = [
                 _create_metric_collector(

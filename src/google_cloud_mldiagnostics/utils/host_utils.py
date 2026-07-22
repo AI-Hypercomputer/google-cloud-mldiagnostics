@@ -121,7 +121,54 @@ def _gce_workload_targets(
   details = [{
       "display_name": display_name,
       "instance_id": instance_id,
-      "hostname": display_name,
+      "hostname": get_hostname(),
+      "zone": gcp.get_instance_zone(),
+      "state": "RUNNING",
+  }]
+  return details
+
+
+def _format_slurm_start_time(raw_time: str | None) -> str | None:
+  if not raw_time:
+    return None
+  if raw_time.isdigit():
+    return datetime.datetime.fromtimestamp(
+        int(raw_time), tz=datetime.timezone.utc
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+  return raw_time
+
+
+def _get_slurm_workload_details() -> dict[str, Any] | None:
+  """Returns workload details if available, otherwise None."""
+  job_id = os.getenv("SLURM_JOB_ID")
+  cluster_name = os.getenv("SLURM_CLUSTER_NAME")
+  if not job_id or not cluster_name:
+    return None
+
+  cluster_path = (
+      f"/projects/{gcp.get_project_id()}/locations/{gcp.get_instance_zone()}/clusters/{cluster_name}"
+  )
+
+  job_name = os.getenv("SLURM_JOB_NAME")
+  display_name = job_name if job_name else f"slurm-job-{job_id}"
+
+  return {
+      "job_id": job_id,
+      "cluster": cluster_path,
+      "display_name": display_name,
+      "submit_time": _format_slurm_start_time(
+          os.getenv("SLURM_JOB_START_TIME")
+      ),
+  }
+
+
+def _slurm_workload_targets() -> list[dict[str, Any]] | None:
+  """Returns workload targets if available, otherwise None."""
+  hostname = get_hostname()
+  details = [{
+      "display_name": hostname,
+      "instance_id": get_instance_id(),
+      "hostname": hostname,
       "zone": gcp.get_instance_zone(),
       "state": "RUNNING",
   }]
@@ -233,6 +280,37 @@ def _gce_run_identifier(workload_details: dict[str, Any]) -> str:
       f"_{workload_details['display_name']}"
       f"_{workload_details['create_time']}"
   )
+  return _get_sha256_hash(identifier)
+
+
+def _slurm_run_identifier(workload_details: dict[str, Any]) -> str:
+  """Returns the unique identifier for the slurm workload."""
+  if not workload_details:
+    raise ValueError(
+        "Could not generate Slurm workload identifier due to missing workload"
+        " details."
+    )
+  required_keys = ["job_id", "cluster", "submit_time"]
+  missing_keys = [k for k in required_keys if not workload_details.get(k)]
+  if missing_keys:
+    raise ValueError(
+        "Could not generate Slurm workload identifier due to missing"
+        f" properties: {', '.join(missing_keys)}."
+    )
+
+  cluster = workload_details["cluster"].split("/")[-1]
+  raw_submit_time = workload_details["submit_time"]
+  iso_str = (
+      raw_submit_time.replace("Z", "+00:00")
+      if raw_submit_time.endswith("Z")
+      else raw_submit_time
+  )
+  transformed_timestamp = (
+      datetime.datetime.fromisoformat(iso_str)
+      .astimezone(datetime.timezone.utc)
+      .strftime("%Y%m%d-%H%M%S")
+  )
+  identifier = f"{cluster}_{workload_details['job_id']}_{transformed_timestamp}"
   return _get_sha256_hash(identifier)
 
 
@@ -356,12 +434,21 @@ def is_master_host(
     serving_engine: mlrun_types.ServingEngine = mlrun_types.ServingEngine.NONE,
 ) -> bool:
   """Checks if the current host is the master host."""
-  return get_process_index(framework, serving_engine) == 0
+  process_index = get_process_index(framework, serving_engine)
+  logger.info(
+      "framework: %s, serving_engine: %s, process_index: %s",
+      framework,
+      serving_engine,
+      process_index,
+  )
+  return process_index == 0
 
 
 def get_workload_details(orchestrator: str = "GKE") -> dict[str, Any] | None:
   """Returns workload details if available, otherwise None."""
-  # TODO: [INTERNAL] - Add support for non-GKE workloads.
+  if orchestrator == "SLURM":
+    return _get_slurm_workload_details()
+
   if orchestrator == "GCE":
     return _get_gce_workload_details()
 
@@ -372,7 +459,9 @@ def get_identifier(
     orchestrator: str = "GKE", workload_details: dict[str, Any] | None = None
 ) -> str:
   """Returns a unique SHA-256 identifier for the workload."""
-  # TODO: [INTERNAL] - Add support for non-GKE workloads.
+  if orchestrator == "SLURM":
+    return _slurm_run_identifier(workload_details)
+
   if orchestrator == "GCE":
     return _gce_run_identifier(workload_details)
 
@@ -382,7 +471,9 @@ def get_identifier(
 def get_workload_targets(
     orchestrator: str = "GKE", workload_details: dict[str, Any] | None = None
 ) -> list[dict[str, Any]] | None:
-  # TODO: [INTERNAL] - Add support for non-GKE workloads.
+  if orchestrator == "SLURM":
+    return _slurm_workload_targets()
+
   if orchestrator == "GCE":
     return _gce_workload_targets(workload_details)
 

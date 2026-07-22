@@ -44,6 +44,15 @@ class ServingEngine(enum.Enum):
   VLLM = "VLLM"
 
 
+class Orchestrator(str, enum.Enum):
+  """Enumeration of supported workload orchestrators."""
+
+  GKE = "GKE"
+  SLURM = "SLURM"
+  GCE = "GCE"
+  UNKNOWN = "UNKNOWN"
+
+
 class ConfigDict(dict):
   """A dictionary that supports both dict-style and attribute-style access."""
 

@@ -26,6 +26,8 @@ _config_instance = None
 _jax_config_module_cache = None
 _libtpu_metric_module_cache = None
 
+logger = logging.getLogger(__name__)
+
 
 def _import_jax_config_module():
   """Lazy load jax_config module and cache result."""
@@ -127,6 +129,7 @@ def get_hardware_config(
 ) -> dict[str, str]:
   """Returns the hardware configuration for ML workload."""
   config_instance = _get_framework_config_instance(framework, serving_engine)
+  logger.debug("config_instance: %s", config_instance)
   if config_instance:
     framework_specific_config = config_instance.get_config()
   else:
@@ -152,11 +155,13 @@ def get_accelerator_type(
 ) -> str:
   """Returns the accelerator type (tpu or gpu) for ML workload."""
   config_instance = _get_framework_config_instance(framework, serving_engine)
+  logger.debug("config_instance: %s", config_instance)
   if config_instance and hasattr(config_instance, "accelerator_type"):
     return config_instance.accelerator_type
 
   from . import host_utils  # pylint: disable=g-import-not-at-top
   detected = host_utils.get_accelerator_type(framework, serving_engine)
+  logger.debug("Accelerator type detected: %s", detected)
   if detected != metric_types.AcceleratorType.UNKNOWN:
     return detected.value
 
