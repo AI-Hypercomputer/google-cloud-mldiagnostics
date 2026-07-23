@@ -31,6 +31,7 @@ import requests
 logger = logging.getLogger(__name__)
 _MAX_RETRIES = 3
 _ERROR_CODE_ALREADY_EXISTS = 6
+_CLOUD_PLATFORM_SCOPE = "https://www.googleapis.com/auth/cloud-platform"
 
 
 def _extract_run_id_from_error(err: Exception) -> Optional[str]:
@@ -92,7 +93,7 @@ class ControlPlaneClient:
     self.ml_runs_path = f"{base_url}/projects/{project_id}/locations/{location}/machineLearningRuns"
 
     # Initialize Google Cloud credentials
-    self.credentials, _ = google.auth.default()
+    self.credentials, _ = google.auth.default(scopes=[_CLOUD_PLATFORM_SCOPE])
 
   def _get_access_token(self) -> str:
     """Get Google Cloud access token for authentication."""
