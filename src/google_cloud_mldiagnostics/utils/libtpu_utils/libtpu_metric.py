@@ -68,17 +68,20 @@ def _initialize():
 
 def get_libtpu_version() -> str:
   """Returns libtpu version if available, otherwise 'n/a'."""
-  if not _initialized:
-    _initialize()
-  if not libtpu_sdk:
-    return "n/a"
   try:
     return metadata.version("libtpu")
   except metadata.PackageNotFoundError:
     try:
       return metadata.version("libtpu-nightly")
     except metadata.PackageNotFoundError:
-      return "n/a"
+      pass
+
+  if not _initialized:
+    _initialize()
+  if not libtpu_sdk:
+    return "n/a"
+  return "n/a"
+
 
 
 def get_tpu_duty_cycle() -> list[float] | None:

@@ -17,6 +17,7 @@
 from collections.abc import Mapping
 import logging
 import os
+from importlib import metadata
 from typing import Any
 
 from google_cloud_mldiagnostics.custom_types import metric_types
@@ -45,7 +46,7 @@ def _get_libtpu_version(
     serving_engine: mlrun_types.ServingEngine = mlrun_types.ServingEngine.NONE,
 ):
   """Lazy load libtpu_metric module and cache result."""
-  if serving_engine != mlrun_types.ServingEngine.NONE:
+  if serving_engine != mlrun_types.ServingEngine.NONE and serving_engine != mlrun_types.ServingEngine.VLLM:
     return "n/a"
   global _libtpu_metric_module_cache
   if _libtpu_metric_module_cache is not None:
@@ -62,12 +63,18 @@ def _get_framework_version(
     serving_engine: mlrun_types.ServingEngine = mlrun_types.ServingEngine.NONE,
 ) -> str:
   """Returns the framework version used for ML workload."""
+  if serving_engine == mlrun_types.ServingEngine.VLLM:
+    try:
+      return metadata.version("vllm")
+    except metadata.PackageNotFoundError:
+      return "unknown"
   if serving_engine != mlrun_types.ServingEngine.NONE:
     return "unknown"
   if framework == mlrun_types.Framework.JAX:
     return _import_jax_config_module().jax_version()
   else:
     return "unknown"
+
 
 
 def _get_xla_flags() -> str:
@@ -92,6 +99,75 @@ def get_software_config(
 
 
 # Hardware configs.
+class GpuHardwareConfig:
+  """A class to hold and query GPU device configuration."""
+
+  def __init__(self):
+    from google_cloud_mldiagnostics.utils.gpu_utils import gpu_metric  # pylint: disable=g-import-not-at-top
+    self._device_name, self._device_count = gpu_metric.get_gpu_device_info()
+
+  @property
+  def device_type(self) -> str:
+    return self._device_name
+
+  @property
+  def num_slices(self) -> int:
+    return 1
+
+  @property
+  def devices_per_slice(self) -> int:
+    return self._device_count
+
+  @property
+  def accelerator_type(self) -> str:
+    return metric_types.AcceleratorType.GPU.value
+
+  def get_config(self) -> dict[str, str]:
+    return {
+        "device_type": self.device_type,
+        "num_slices": str(self.num_slices),
+        "devices_per_slice": str(self.devices_per_slice),
+        "accelerator_type": self.accelerator_type,
+    }
+
+
+class EnvVarTpuHardwareConfig:
+  """TPU hardware config detector using environment variables."""
+
+  def __init__(self):
+    self.tpu_type = os.environ.get("TPU_ACCELERATOR_TYPE", "unknown")
+    self.devices_per_slice = "unknown"
+    if "-" in self.tpu_type:
+      try:
+        cores = int(self.tpu_type.split("-")[-1])
+        if self.tpu_type.startswith("v4"):
+          self.devices_per_slice = str(cores // 2)
+        else:
+          self.devices_per_slice = str(cores)
+      except ValueError:
+        pass
+
+  @property
+  def device_type(self) -> str:
+    return self.tpu_type
+
+  @property
+  def num_slices(self) -> str:
+    return "1"
+
+  @property
+  def accelerator_type(self) -> str:
+    return metric_types.AcceleratorType.TPU.value
+
+  def get_config(self) -> dict[str, str]:
+    return {
+        "device_type": self.device_type,
+        "num_slices": self.num_slices,
+        "devices_per_slice": self.devices_per_slice,
+        "accelerator_type": self.accelerator_type,
+    }
+
+
 def _get_framework_config_instance(
     framework: mlrun_types.Framework = mlrun_types.Framework.JAX,
     serving_engine: mlrun_types.ServingEngine = mlrun_types.ServingEngine.NONE,
@@ -111,9 +187,17 @@ def _get_framework_config_instance(
   """
   global _config_instance
   if _config_instance is None:
-    if serving_engine != mlrun_types.ServingEngine.NONE:
-      return None
-    if framework == mlrun_types.Framework.JAX:
+    if serving_engine == mlrun_types.ServingEngine.VLLM:
+      from google_cloud_mldiagnostics.utils import host_utils  # pylint: disable=g-import-not-at-top
+      acc_type = host_utils.get_accelerator_type(framework, serving_engine)
+      if acc_type == metric_types.AcceleratorType.GPU:
+        _config_instance = GpuHardwareConfig()
+      elif acc_type == metric_types.AcceleratorType.TPU:
+        _config_instance = EnvVarTpuHardwareConfig()
+      else:
+        logging.warning("Unknown accelerator type for VLLM serving engine.")
+        return None
+    elif framework == mlrun_types.Framework.JAX:
       _config_instance = _import_jax_config_module().JaxHardwareConfig()
     else:
       logging.warning(
