@@ -97,14 +97,21 @@ def _get_gke_workload_details() -> dict[str, Any] | None:
   return details
 
 
-def _get_gce_workload_details() -> dict[str, Any] | None:
+def _get_gce_workload_details(
+    run_workload_id: str | None = None,
+) -> dict[str, Any] | None:
   """Returns workload details if available, otherwise None."""
+  workload_id = run_workload_id or os.environ.get("RUN_WORKLOAD_ID")
+  instance_id = get_instance_id()
+  hostname = get_hostname()
   details = {
-      "id": get_instance_id(),
-      "display_name": get_hostname(),
+      "id": workload_id if workload_id else instance_id,
+      "display_name": workload_id if workload_id else hostname,
       "create_time": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+      "_instance_id": instance_id,
+      "_is_workload_id_set": bool(workload_id),
+      "_hostname": hostname,
   }
-
   return details
 
 
@@ -114,14 +121,14 @@ def _gce_workload_targets(
   """Returns workload targets if available, otherwise None."""
   if not workload_details:
     return None
-  display_name = workload_details.get("display_name", "")
-  instance_id = workload_details.get("id", "")
-  if not display_name and not instance_id:
+  hostname = workload_details.get("_hostname")
+  instance_id = workload_details.get("_instance_id")
+  if not hostname and not instance_id:
     return None
   details = [{
-      "display_name": display_name,
+      "display_name": hostname or "",
       "instance_id": instance_id,
-      "hostname": get_hostname(),
+      "hostname": hostname or "",
       "zone": gcp.get_instance_zone(),
       "state": "RUNNING",
   }]
@@ -268,18 +275,17 @@ def _gce_run_identifier(workload_details: dict[str, Any]) -> str:
         "Could not generate GCE workload identifier due to missing workload"
         " details."
     )
-  required_keys = ["id", "display_name", "create_time"]
+  if workload_details.get("_is_workload_id_set"):
+    return _get_sha256_hash(str(workload_details["id"]))
+
+  required_keys = ["id", "create_time"]
   missing_keys = [k for k in required_keys if not workload_details.get(k)]
   if missing_keys:
     raise ValueError(
         "Could not generate GCE workload identifier due to missing properties:"
         f" {', '.join(missing_keys)}."
     )
-  identifier = (
-      f"{workload_details['id']}"
-      f"_{workload_details['display_name']}"
-      f"_{workload_details['create_time']}"
-  )
+  identifier = f"{workload_details['id']}_{workload_details['create_time']}"
   return _get_sha256_hash(identifier)
 
 
@@ -444,13 +450,15 @@ def is_master_host(
   return process_index == 0
 
 
-def get_workload_details(orchestrator: str = "GKE") -> dict[str, Any] | None:
+def get_workload_details(
+    orchestrator: str = "GKE", run_workload_id: str | None = None
+) -> dict[str, Any] | None:
   """Returns workload details if available, otherwise None."""
   if orchestrator == "SLURM":
     return _get_slurm_workload_details()
 
   if orchestrator == "GCE":
-    return _get_gce_workload_details()
+    return _get_gce_workload_details(run_workload_id)
 
   return _get_gke_workload_details()
 

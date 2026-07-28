@@ -68,6 +68,7 @@ def initialize_mlrun(
     metrics_record_interval_sec: float = 10.0,
     framework: mlrun_types.Framework = mlrun_types.Framework.JAX,
     serving_engine: mlrun_types.ServingEngine = mlrun_types.ServingEngine.NONE,
+    run_workload_id: str | None = None,
 ) -> mlrun_types.MLRun:
   """Initializes a new ML run.
 
@@ -87,6 +88,8 @@ def initialize_mlrun(
       metrics_record_interval_sec: The metrics record interval in seconds.
       framework: The framework used for the run.
       serving_engine: The serving engine used for the run.
+      run_workload_id: Optional shared workload identifier for GCE/Custom
+        Orchestrator workloads.
 
   Returns:
       The initialized ML run object.
@@ -114,7 +117,9 @@ def initialize_mlrun(
   created_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
   run_phase = mlrun_types.RunPhase.PHASE_ACTIVE
   orchestrator = orchestrator_utils.detect_orchestrator()
-  workload_details = host_utils.get_workload_details(orchestrator)
+  workload_details = host_utils.get_workload_details(
+      orchestrator, run_workload_id=run_workload_id
+  )
 
   # Generate display name and name for the MLRun.
   display_name = name
