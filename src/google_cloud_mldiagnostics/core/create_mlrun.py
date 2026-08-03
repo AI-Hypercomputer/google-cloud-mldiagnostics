@@ -223,6 +223,12 @@ def initialize_mlrun(
           if accelerator_type == metric_types.AcceleratorType.GPU.value:
             metric_collectors = [
                 _create_metric_collector(
+                    metric_types.MetricType.GPU_DUTY_CYCLE.value,
+                    gpu_metric.get_gpu_duty_cycle,
+                    framework,
+                    metric_types.AcceleratorType.GPU.value,
+                ),
+                _create_metric_collector(
                     metric_types.MetricType.GPU_UTILIZATION.value,
                     gpu_metric.get_gpu_utilization,
                     framework,

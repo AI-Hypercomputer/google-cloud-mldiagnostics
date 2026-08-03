@@ -106,8 +106,8 @@ def _get_single_vram_utilization(handle: Any) -> float:
   return 0.0
 
 
-def get_gpu_utilization() -> Sequence[float]:
-  """Returns the GPU SM core utilization from pynvml."""
+def get_gpu_duty_cycle() -> Sequence[float]:
+  """Returns the GPU SM duty cycle (temporal active percentage) from pynvml."""
   if not _initialized:
     _initialize()
   if not pynvml:
@@ -124,8 +124,14 @@ def get_gpu_utilization() -> Sequence[float]:
         for i in range(device_count)
     ]
   except Exception:  # pylint: disable=broad-exception-caught
-    logger.warning("Failed to get GPU utilization.", exc_info=True)
+    logger.warning("Failed to get GPU duty cycle.", exc_info=True)
     return [0.0]
+
+
+# TODO([INTERNAL]): Remove this function once all references are updated.
+def get_gpu_utilization() -> Sequence[float]:
+  """Deprecated: Use get_gpu_duty_cycle() instead."""
+  return get_gpu_duty_cycle()
 
 
 def get_gpu_tensorcore_utilization() -> Sequence[float]:

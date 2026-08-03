@@ -37,6 +37,7 @@ class MetricType(enum.Enum):
   TPU_DUTY_CYCLE = "tpu_duty_cycle"
   TPU_TENSORCORE_UTILIZATION = "tpu_tensorcore_utilization"
   HBM_UTILIZATION = "hbm_utilization"
+  GPU_DUTY_CYCLE = "gpu_duty_cycle"
   GPU_UTILIZATION = "gpu_utilization"
   GPU_TENSORCORE_UTILIZATION = "gpu_tensorcore_utilization"
   VRAM_UTILIZATION = "vram_utilization"
@@ -61,6 +62,7 @@ METRIC_UNITS = {
     MetricType.TPU_DUTY_CYCLE.value: "%",
     MetricType.TPU_TENSORCORE_UTILIZATION.value: "%",
     MetricType.HBM_UTILIZATION.value: "%",
+    MetricType.GPU_DUTY_CYCLE.value: "%",
     MetricType.GPU_UTILIZATION.value: "%",
     MetricType.GPU_TENSORCORE_UTILIZATION.value: "%",
     MetricType.VRAM_UTILIZATION.value: "%",

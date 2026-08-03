@@ -39,6 +39,7 @@ _SYSTEM_METRICS = {
     metric_types.MetricType.TPU_DUTY_CYCLE.value,
     metric_types.MetricType.TPU_TENSORCORE_UTILIZATION.value,
     metric_types.MetricType.HBM_UTILIZATION.value,
+    metric_types.MetricType.GPU_DUTY_CYCLE.value,
     metric_types.MetricType.GPU_UTILIZATION.value,
     metric_types.MetricType.GPU_TENSORCORE_UTILIZATION.value,
     metric_types.MetricType.VRAM_UTILIZATION.value,
