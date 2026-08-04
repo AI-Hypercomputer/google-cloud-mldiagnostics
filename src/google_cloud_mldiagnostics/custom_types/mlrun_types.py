@@ -117,6 +117,7 @@ class MLRun:
   display_name: str = ""
   on_demand_xprof: bool = False
   log_system_metrics: bool = False
+  metric_only_run: bool = False
   environment: str = ""
   framework: Framework = Framework.JAX
   serving_engine: ServingEngine = ServingEngine.NONE

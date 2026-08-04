@@ -156,7 +156,7 @@ class GlobalRunManager:
     if mlrun.gcs_path:
       artifacts = {"gcsPath": mlrun.gcs_path}
 
-    tools = [{"xprof": {}}]
+    tools = None if mlrun.metric_only_run else [{"xprof": {}}]
     labels = {
         "created_by": "diagon_sdk",
         "create-tool-mode": "regular",
@@ -165,6 +165,7 @@ class GlobalRunManager:
         "sdk_report_system_metrics": (
             "true" if mlrun.log_system_metrics else "false"
         ),
+        "metric_only_run": "true" if mlrun.metric_only_run else "false",
         "accelerator_type": self._accelerator_type.value,
         "framework": mlrun.framework.value.lower(),
         "serving_engine": (

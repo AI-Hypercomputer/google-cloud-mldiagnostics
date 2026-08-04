@@ -60,6 +60,7 @@ def initialize_mlrun(
     environment: str,
     on_demand_xprof: bool,
     log_system_metrics: bool = False,
+    metric_only_run: bool = False,
     run_group: str | None = None,
     configs: Mapping[str, Any] | None = None,
     gcs_path: str | None = None,
@@ -172,6 +173,7 @@ def initialize_mlrun(
       display_name=display_name,
       on_demand_xprof=on_demand_xprof,
       log_system_metrics=log_system_metrics,
+      metric_only_run=metric_only_run,
       environment=environment,
       framework=framework,
       serving_engine=serving_engine,
@@ -300,7 +302,13 @@ def initialize_mlrun(
             default_metrics_recorder.stop
         )
 
-  if on_demand_xprof:
+  logger.info(
+      "Check and start xprof server => on_demand_xprof: %s,"
+      " metric_only_run: %s",
+      on_demand_xprof,
+      metric_only_run,
+  )
+  if on_demand_xprof and not metric_only_run:
     # LINT.IfChange(xprof_port)
     xprof_port = 9999
     # LINT.ThenChange(//depot/google3/cloud/hosted/hypercomputecluster/clh/diagnostics/consumerservice/utils.go:DefaultCapturePort)

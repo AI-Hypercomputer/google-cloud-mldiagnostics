@@ -100,10 +100,17 @@ class Xprof:
     self._initialized = True
 
   def _should_profile(self):
-    if self._process_index_list is None or (
+    """Determines if profiling should be enabled based on the run and host info."""
+    if (
+        self._process_index_list is None
+        or (
+            self._resolved_run is not None
+            and host_utils.get_process_index(self._resolved_run.framework)
+            in self._process_index_list
+        )
+    ) and (
         self._resolved_run is not None
-        and host_utils.get_process_index(self._resolved_run.framework)
-        in self._process_index_list
+        and not self._resolved_run.metric_only_run
     ):
       return True
     return False
@@ -115,10 +122,7 @@ class Xprof:
     if self._resolved_run and self._resolved_run.environment == "prod":
       return
 
-    if (
-        self._start_time is None
-        or self._session_phase is None
-    ):
+    if self._start_time is None or self._session_phase is None:
       logger.error(
           "Profiler session not set start time or session phase,"
           " skipping reporting."
