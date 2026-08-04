@@ -474,12 +474,12 @@ def get_identifier(
 ) -> str:
   """Returns a unique SHA-256 identifier for the workload."""
   if orchestrator == "SLURM":
-    return _slurm_run_identifier(workload_details)
+    return _slurm_run_identifier(workload_details)  # pyrefly: ignore[bad-argument-type]
 
   if orchestrator == "GCE":
-    return _gce_run_identifier(workload_details)
+    return _gce_run_identifier(workload_details)  # pyrefly: ignore[bad-argument-type]
 
-  return _gke_run_identifier(workload_details)
+  return _gke_run_identifier(workload_details)  # pyrefly: ignore[bad-argument-type]
 
 
 def get_workload_targets(

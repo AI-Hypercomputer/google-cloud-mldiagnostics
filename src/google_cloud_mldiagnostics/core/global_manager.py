@@ -175,7 +175,7 @@ class GlobalRunManager:
         ),
     }
     try:
-      response = self._control_plane_client.create_ml_run(
+      response = self._control_plane_client.create_ml_run(  # pyrefly: ignore[missing-attribute]
           name=mlrun.name,
           display_name=mlrun.display_name,
           run_phase=str(mlrun.run_phase.value),
@@ -193,7 +193,7 @@ class GlobalRunManager:
           response.get("name") if response else "unknown",
       )
       if response and "name" in response:
-        self._ml_run.name = response.get("name", "unknown").split("/")[-1]
+        self._ml_run.name = response.get("name", "unknown").split("/")[-1]  # pyrefly: ignore[missing-attribute]
 
     except requests.exceptions.HTTPError as e_create:
       if e_create.response is not None and e_create.response.status_code == 409:
@@ -201,7 +201,7 @@ class GlobalRunManager:
             "ML run %r already exists. Updating existing run details.",
             mlrun.name,
         )
-        self._control_plane_client.update_ml_run(
+        self._control_plane_client.update_ml_run(  # pyrefly: ignore[missing-attribute]
             name=mlrun.name,
             display_name=mlrun.display_name,
             tools=tools,

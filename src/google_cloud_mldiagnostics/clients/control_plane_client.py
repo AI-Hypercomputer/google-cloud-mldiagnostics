@@ -284,9 +284,9 @@ class ControlPlaneClient:
 
     if workload_targets:
       if not payload.get("workloadDetails", None):
-        payload["workloadDetails"] = {}
+        payload["workloadDetails"] = {}  # pyrefly: ignore[bad-assignment]
 
-      payload["workloadDetails"]["targets"] = workload_targets  # pyrefly: ignore[bad-assignment]
+      payload["workloadDetails"]["targets"] = workload_targets  # pyrefly: ignore[bad-assignment, unsupported-operation]
 
     # Sanitize the name for machineLearningRunId
     sanitized_name = host_utils.sanitize_identifier(name)
