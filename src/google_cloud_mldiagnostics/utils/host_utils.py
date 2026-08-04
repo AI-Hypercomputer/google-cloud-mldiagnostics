@@ -322,7 +322,13 @@ def _slurm_run_identifier(workload_details: dict[str, Any]) -> str:
 
 # Public functions
 def get_hostname() -> str:
-  """Returns hostname of the current machine."""
+  """Returns hostname or pod name of the current machine."""
+  # POD_NAME is set in GKE, HOSTNAME is set in GCE.
+  pod_name = os.environ.get("POD_NAME") or os.environ.get("HOSTNAME")
+  if pod_name:
+    return pod_name
+
+  # Fallback to socket.gethostname() for non-containerized environments.
   return socket.gethostname()
 
 
