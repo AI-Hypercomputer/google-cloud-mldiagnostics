@@ -344,7 +344,10 @@ class GlobalRunManager:
         profiler_target = None
         for target in workload_details.get("targets", []):
           # In GKE, hostname is the pod name without unique suffix.
-          if target.get("displayName", "").startswith(hostname):
+          # In Slurm / Other orchestrators, hostname is the instance name.
+          if target.get("hostname", "") == hostname or target.get(
+              "displayName", ""
+          ).startswith(hostname):
             profiler_target = target.get("displayName", None)
             break
 
