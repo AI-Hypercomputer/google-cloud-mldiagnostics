@@ -23,6 +23,7 @@
   - [IAM Permissions](#iam-permissions)
   - [Configure GKE Cluster](#configure-gke-cluster)
   - [Install ML Diagnostics SDK](#install-ml-diagnostics-sdk)
+  - [Upgrading & Known Limitations in Older Versions](#upgrading-known-limitations-in-older-versions)
 - [How to use](#how-to-use)
   - [Enable Cloud Logging](#enable-cloud-logging)
   - [Enable Debug Logging](#enable-debug-logging)
@@ -360,6 +361,21 @@ pip install google-cloud-mldiagnostics
 
 This package does not install `libtpu`, `jax`, and `xprof`; you are expected to
 install these separately if needed for your workload.
+
+### Upgrading & Known Limitations in Older Versions
+
+We strongly recommend upgrading to **SDK version `1.0.6` or later** (`pip install --upgrade google-cloud-mldiagnostics`).
+
+**Known limitations in SDK versions `< 1.0.6`:**
+
+*   **GKE Workload Monitoring Compatibility:** If your GKE cluster version is `1.36.0-gke.4681000` or later and the cluster is present in a supported Workload Monitoring GA region (`us-central1`, `us-east1`, `us-east4`, `us-east5`, `us-south1`, `us-west1`, `europe-west1`, `europe-west2`, `europe-west4`, `southamerica-west1`), Diagon Workload Monitoring automatically pre-creates a Machine Learning Run for the workload. Using MLDiagnostics SDK version `< 1.0.6` will log an informational message similar to the following and skip updating it, which prevents profiling from being enabled on the run:
+
+    ```log
+    INFO:google_cloud_mldiagnostics.core.global_manager:ML run 'projects/12345/locations/us-central1/machineLearningRuns/my-job' already exists, skipping creation.
+    ```
+
+    The mitigation is to upgrade MLDiagnostics to the latest SDK version (`1.0.6` or higher), which automatically updates existing runs and enables full profile capture.
+
 
 ## How to use
 
