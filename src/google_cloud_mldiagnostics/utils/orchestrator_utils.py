@@ -16,9 +16,28 @@
 
 import os
 
+from google_cloud_mldiagnostics.custom_types import mlrun_types
 import requests
 
-from google_cloud_mldiagnostics.custom_types import mlrun_types
+
+def _fetch_gcp_metadata(path: str) -> requests.Response | None:
+  """Fetches metadata from the GCP metadata server.
+
+  Args:
+    path: The metadata path to query (e.g., 'instance/id').
+
+  Returns:
+    The response object if successful, otherwise None.
+  """
+  headers = {'Metadata-Flavor': 'Google'}
+  try:
+    return requests.get(
+        f'http://metadata.google.internal/computeMetadata/v1/{path}',
+        headers=headers,
+        timeout=0.1,
+    )
+  except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+    return None
 
 
 def detect_orchestrator():
@@ -26,28 +45,31 @@ def detect_orchestrator():
   orchestrator = None
 
   # Check for GCE Metadata Server to determine if running on GCP
+  response = _fetch_gcp_metadata('instance/id')
   on_gcp = False
-  try:
-    headers = {'Metadata-Flavor': 'Google'}
-    # Use a more specific endpoint to be sure
-    response = requests.get(
-        'http://metadata.google.internal/computeMetadata/v1/instance/id',
-        headers=headers,
-        timeout=0.1,
-    )
-    if (
-        response.status_code == 200
-        and response.headers.get('Metadata-Flavor') == 'Google'
-    ):
-      on_gcp = True
-  except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
-    pass
+  if (
+      response is not None
+      and response.status_code == 200
+      and response.headers.get('Metadata-Flavor') == 'Google'
+  ):
+    on_gcp = True
 
   if on_gcp:
-    # Running on GCP, check if it's GKE or standard GCE
+    # First check if we are in *any* Kubernetes environment
+    is_k8s = False
     if os.getenv('KUBERNETES_SERVICE_HOST') or os.path.exists(
         '/var/run/secrets/kubernetes.io/serviceaccount/token'
     ):
+      is_k8s = True
+
+    # Then check if it is Managed GKE by verifying the cluster-name attribute
+    is_gke = False
+    if is_k8s:
+      gke_response = _fetch_gcp_metadata('instance/attributes/cluster-name')
+      if gke_response is not None and gke_response.status_code == 200:
+        is_gke = True
+
+    if is_gke:
       orchestrator = mlrun_types.Orchestrator.GKE.value
     elif (
         os.getenv('SLURM_CLUSTER_NAME')
@@ -58,7 +80,13 @@ def detect_orchestrator():
         )
     ):
       orchestrator = mlrun_types.Orchestrator.SLURM.value
+    elif is_k8s:
+      # TODO([INTERNAL]): Use a proper orchestrator type for self-hosted
+      # K3s/K8s once design is approved.
+      # Currently, self-hosted K3s/K8s falls back to GCE.
+      orchestrator = mlrun_types.Orchestrator.GCE.value
     else:
+      # Any non-GKE workload on GCE VMs
       orchestrator = mlrun_types.Orchestrator.GCE.value
 
   return orchestrator
