@@ -22,7 +22,12 @@ specified Google Storage path.
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
+import functools
 from typing import List
+import urllib.parse
+
+import requests
 
 
 _DESCRIPTION = """
@@ -181,6 +186,113 @@ def _validate_hostnames(
   return ",".join(_validate(hostname) for hostname in hostnames)
 
 
+def _collect_profile_http(
+    host_str: str, port: int, duration_in_ms: int, log_dir: str
+):
+  """Sends an HTTP profile collection request to the specified host.
+
+  Args:
+    host_str: The hostname or IP address.
+    port: The port number of the profiler server on the host.
+    duration_in_ms: The duration of the trace collection in milliseconds.
+    log_dir: The directory where the profiling logs will be saved.
+  """
+  host = host_str.strip()
+  if not host:
+    print(
+        "Skipping HTTP profile collection: host is null or empty.", flush=True
+    )
+    return
+  try:
+    url = urllib.parse.urljoin(f"http://{host}:{port}", "profiling")
+    print(
+        f"Sending HTTP profile collection request to {host}:{port} ({url})...",
+        flush=True,
+    )
+    response = requests.post(
+        url,
+        json={"duration_ms": duration_in_ms, "repository_path": log_dir},
+    )
+    response.raise_for_status()
+    print(
+        "Successfully triggered HTTP profile collection on"
+        f" {host}:{port}.",
+        flush=True,
+    )
+  except requests.exceptions.RequestException as http_e:
+    print(
+        f"HTTP fallback profile collection failed for {host}:{port}:"
+        f" {http_e}.",
+        flush=True,
+    )
+
+
+def _collect_profile_xprof(
+    *,
+    hosts: str,
+    port: int,
+    duration_in_ms: int,
+    log_dir: str,
+    session_name: str,
+    host_tracer_level: int,
+    device_tracer_level: int,
+    python_tracer_level: int,
+    override_hostnames: str,
+    use_system_hostname: bool,
+):
+  """Collects a profile from the specified hosts and ports using xprof.
+
+  Args:
+    hosts: Comma-separated list of hostnames or IPs.
+    port: The port number of the profiler server on each host.
+    duration_in_ms: The duration of the trace collection in milliseconds.
+    log_dir: The directory where the profiling logs will be saved.
+    session_name: The session name for xprof session. Not effect for now. Will
+      be implemented later.
+    host_tracer_level: The level of host tracing.
+    device_tracer_level: The level of device tracing.
+    python_tracer_level: The level of Python tracing.
+    override_hostnames: Comma-separated list of hostnames to use for trace
+      filenames.
+    use_system_hostname: If True, use the system hostname for trace filenames
+      instead of the IP address.
+  """
+  options = {
+      "host_tracer_level": host_tracer_level,
+      "device_tracer_level": device_tracer_level,
+      "python_tracer_level": python_tracer_level,
+  }
+
+  if use_system_hostname and override_hostnames:
+    raise ValueError(
+        "--use_system_hostname and --override_hostnames are mutually"
+        " exclusive. Specify only one."
+    )
+
+  if session_name:
+    options["session_id"] = session_name  # pyrefly: ignore[bad-assignment]
+  else:
+    print("Session name not provided, xprof will use auto generated")
+
+  if use_system_hostname:
+    options["use_system_hostname"] = True  # pyrefly: ignore[bad-assignment]
+  elif override_hostnames:
+    options["override_hostnames"] = _validate_hostnames(  # pyrefly: ignore[bad-assignment]
+        hosts, override_hostnames
+    )
+
+  xprof = _import_xprof()
+  xprof.trace(
+      _to_hosts_port(hosts, port),
+      log_dir,
+      "",
+      True,
+      duration_in_ms,
+      DEFAULT_NUM_TRACING_ATTEMPTS,
+      options,
+  )
+
+
 def _collect_profile(
     *,
     hosts: str,
@@ -211,45 +323,54 @@ def _collect_profile(
     use_system_hostname: If True, use the system hostname for trace filenames
       instead of the IP address.
   """
-  options = {
-      "host_tracer_level": host_tracer_level,
-      "device_tracer_level": device_tracer_level,
-      "python_tracer_level": python_tracer_level,
-  }
-
-  if use_system_hostname and override_hostnames:
-    raise ValueError(
-        "--use_system_hostname and --override_hostnames are mutually"
-        " exclusive. Specify only one."
-    )
-
   # This script will be used from GKE so we print to guarntee that output
   # will have this messages without additional configuration.
   print(f"Starting remote profile for {hosts} on {port}...")
 
-  if session_name:
-    options["session_id"] = session_name  # pyrefly: ignore[bad-assignment]
-  else:
-    print("Session name not provided, xprof will use auto generated")
-
-  if use_system_hostname:
-    options["use_system_hostname"] = True  # pyrefly: ignore[bad-assignment]
-  elif override_hostnames:
-    options["override_hostnames"] = _validate_hostnames(  # pyrefly: ignore[bad-assignment]
-        hosts, override_hostnames
+  try:
+    _collect_profile_xprof(
+        hosts=hosts,
+        port=port,
+        duration_in_ms=duration_in_ms,
+        log_dir=log_dir,
+        session_name=session_name,
+        host_tracer_level=host_tracer_level,
+        device_tracer_level=device_tracer_level,
+        python_tracer_level=python_tracer_level,
+        override_hostnames=override_hostnames,
+        use_system_hostname=use_system_hostname,
     )
+    print(f"Dumped profiling information in: {log_dir}")
+  except RuntimeError as e:
+    error_msg = str(e)
+    # The actual unavailable details might be natively logged to stderr, but we
+    # check for both just in case a compatible profiler includes them.
+    if (
+        "No trace event is collected" in error_msg
+        or "UNAVAILABLE" in error_msg
+    ):
+      print(
+          "Detected suspected gRPC to HTTP mismatch or connection refusal."
+          " Falling back to HTTP profile collection...",
+          flush=True,
+      )
 
-  xprof = _import_xprof()
-  xprof.trace(
-      _to_hosts_port(hosts, port),
-      log_dir,
-      "",
-      True,
-      duration_in_ms,
-      DEFAULT_NUM_TRACING_ATTEMPTS,
-      options,
-  )
-  print(f"Dumped profiling information in: {log_dir}")
+      host_list = hosts.split(",")
+      with concurrent.futures.ThreadPoolExecutor(
+          max_workers=min(len(host_list), 10)
+      ) as executor:
+        # Use executor.map to run them in parallel and wait for all to complete
+        fallback_fn = functools.partial(
+            _collect_profile_http,
+            port=port,
+            duration_in_ms=duration_in_ms,
+            log_dir=log_dir,
+        )
+        list(executor.map(fallback_fn, host_list))
+
+      print(f"Dumped profiling information in: {log_dir}")
+    else:
+      raise
 
 
 def _to_hosts_port(hosts: str, port: int):
