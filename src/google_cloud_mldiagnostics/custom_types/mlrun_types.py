@@ -14,6 +14,7 @@
 
 """Module for registering and managing ML runs."""
 
+from collections.abc import Mapping
 import dataclasses
 import enum
 from typing import Any
@@ -99,7 +100,7 @@ class MLRun:
 
   # fields with defaults if not provided by users
   run_group: str = ""
-  configs: dict[str, Any] | None = None
+  configs: Mapping[str, Any] | None = None
   gcs_path: str | None = None
 
   # Fields with default values before GKE integration
@@ -121,6 +122,8 @@ class MLRun:
   environment: str = ""
   framework: Framework = Framework.JAX
   serving_engine: ServingEngine = ServingEngine.NONE
+  metrics_exporter_config: Mapping[str, Any] | None = None
+
 
   def __post_init__(self) -> None:
     gcp.validate_region(self.location)

@@ -70,7 +70,10 @@ def initialize_mlrun(
     framework: mlrun_types.Framework = mlrun_types.Framework.JAX,
     serving_engine: mlrun_types.ServingEngine = mlrun_types.ServingEngine.NONE,
     run_workload_id: str | None = None,
+    metrics_exporter_config: Mapping[str, Any] | None = None,
 ) -> mlrun_types.MLRun:
+
+
   """Initializes a new ML run.
 
   Args:
@@ -81,6 +84,7 @@ def initialize_mlrun(
         enabled, the port is set to 9999.
       log_system_metrics: Whether to log system metrics to Cloud Logging. By
         default, system metrics are logged to Cloud Logging.
+      metric_only_run: Whether to create a metric-only run. Default is False.
       run_group: The run set this run belongs to.
       configs: Dictionary of configuration parameters.
       gcs_path: GCS path for storing run artifacts.
@@ -91,6 +95,7 @@ def initialize_mlrun(
       serving_engine: The serving engine used for the run.
       run_workload_id: Optional shared workload identifier for GCE/Custom
         Orchestrator workloads.
+      metrics_exporter_config: Optional configuration for metrics exporter.
 
   Returns:
       The initialized ML run object.
@@ -177,7 +182,10 @@ def initialize_mlrun(
       environment=environment,
       framework=framework,
       serving_engine=serving_engine,
+      metrics_exporter_config=metrics_exporter_config,
   )
+
+
 
   logger.debug("Initializing MLRun: %s", ml_run)
 

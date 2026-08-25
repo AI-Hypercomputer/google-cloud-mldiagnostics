@@ -170,21 +170,27 @@ class Xprof:
       return
 
     logger.info("Starting JAX profiling to: %s", self._gcs_profile_dir)
+    options = jax.profiler.ProfileOptions()
+    self._current_session_id = host_utils.effective_session_id(session_id)
+    options.session_id = self._current_session_id
+    self._start_time = time.time()
+    self._end_time = None
+    
     try:
-      options = jax.profiler.ProfileOptions()
-      self._current_session_id = host_utils.effective_session_id(session_id)
-      options.session_id = self._current_session_id
-      self._start_time = time.time()
-      self._end_time = None
       jax.profiler.start_trace(self._gcs_profile_dir, profiler_options=options)  # pyrefly: ignore[bad-argument-type]
-      self._session_phase = "ACTIVE"
-      self._is_profiling = True
-
-      logger.info("profiling_status: started")
-    except exceptions.ProfilingError as e:
+    except Exception as e:  # pylint: disable=broad-exception-caught
       self._session_phase = "FAILED"
       logger.error("Error starting JAX profiler: %s", e)
       self._is_profiling = False
+      self._report_profiler_session(
+          create_new_session=True, context_msg="on_start"
+      )
+      return
+
+    self._session_phase = "ACTIVE"
+    self._is_profiling = True
+
+    logger.info("profiling_status: started")
 
     self._report_profiler_session(
         create_new_session=True, context_msg="on_start"
@@ -197,18 +203,23 @@ class Xprof:
       return
 
     logger.info("Stopping JAX profiling for: %s", self._gcs_profile_dir)
+    self._end_time = time.time()
     try:
-      self._end_time = time.time()
       jax.profiler.stop_trace()
-      self._session_phase = "SUCCEEDED"
-      self._is_profiling = False
-      logger.info("profiling_status: stopped")
-      logger.info(
-          "profiling traces should be available at: %s", self._gcs_profile_dir
-      )
-    except exceptions.ProfilingError as e:
+    except Exception as e:  # pylint: disable=broad-exception-caught
       self._session_phase = "FAILED"
       logger.error("Error stopping JAX profiler: %s", e)
+      self._report_profiler_session(
+          create_new_session=False, context_msg="on_stop"
+      )
+      return
+
+    self._session_phase = "SUCCEEDED"
+    self._is_profiling = False
+    logger.info("profiling_status: stopped")
+    logger.info(
+        "profiling traces should be available at: %s", self._gcs_profile_dir
+    )
 
     self._report_profiler_session(
         create_new_session=False, context_msg="on_stop"
@@ -231,17 +242,22 @@ class Xprof:
         self._gcs_profile_dir, profiler_options=options  # pyrefly: ignore[bad-argument-type]
     )
     logger.info("Entering xprof context for: %s", self._gcs_profile_dir)
+    self._start_time = time.time()
+    self._end_time = None
     try:
-      self._start_time = time.time()
-      self._end_time = None
       self._trace_context_manager.__enter__()
-      self._session_phase = "ACTIVE"
-      self._is_profiling = True
-      logger.info("profiling_status: context_started")
-    except exceptions.ProfilingError as e:
+    except Exception as e:  # pylint: disable=broad-exception-caught
       self._session_phase = "FAILED"
       logger.error("Error starting JAX profiler in context manager: %s", e)
       self._is_profiling = False
+      self._report_profiler_session(
+          create_new_session=True, context_msg="on_context_enter"
+      )
+      return self
+
+    self._session_phase = "ACTIVE"
+    self._is_profiling = True
+    logger.info("profiling_status: context_started")
 
     self._report_profiler_session(
         create_new_session=True, context_msg="on_context_enter"

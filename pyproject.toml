@@ -40,6 +40,13 @@ dependencies = [
   "pynvml>=11.5.0",
 ]
 
+[project.optional-dependencies]
+otel = [
+    "opentelemetry-api>=1.20.0",
+    "opentelemetry-sdk>=1.20.0",
+    "opentelemetry-exporter-otlp>=1.20.0",
+]
+
 [build-system]
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"

@@ -136,6 +136,7 @@ class LoggingClient:
           step = metric.get("step")
           labels = metric.get("labels")
 
+          severity = metric.get("severity", "INFO")
           metric_resource = resource.Resource(
               type="generic_node",
               labels={
@@ -152,6 +153,8 @@ class LoggingClient:
             payload = {"values": [value]}
           elif isinstance(value, list):
             payload = {"values": value}
+          elif isinstance(value, str):
+            payload = {"message": value}
           else:
             logger.warning(
                 "Skipping metric %s due to unsupported value type: %s",
@@ -179,7 +182,7 @@ class LoggingClient:
 
           batch.log_struct(
               payload,
-              severity="INFO",
+              severity=severity,
               timestamp=current_time,
               resource=metric_resource,
           )

@@ -66,7 +66,7 @@ def get_instance_zone(timeout: int = 5) -> str | None:
       return zone_path.split("/")[-1]
 
   except (urllib.error.URLError, urllib.error.HTTPError, ValueError) as e:
-    print(f"Failed to get instance zone: {e}")
+    logging.warning("Failed to get instance zone: %s", e)
     return None
 
 

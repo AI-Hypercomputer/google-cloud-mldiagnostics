@@ -35,7 +35,6 @@ from google_cloud_mldiagnostics.custom_types import exceptions
 from google_cloud_mldiagnostics.custom_types import mlrun_types
 from google_cloud_mldiagnostics.utils import host_utils
 
-
 logger = logging.getLogger(__name__)
 
 

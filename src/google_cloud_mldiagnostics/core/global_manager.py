@@ -19,13 +19,17 @@ import threading
 import time
 from typing import Optional
 
+import requests
+
 from google_cloud_mldiagnostics import _version
 from google_cloud_mldiagnostics.clients import control_plane_client
 from google_cloud_mldiagnostics.clients import logging_client
 from google_cloud_mldiagnostics.custom_types import metric_types
 from google_cloud_mldiagnostics.custom_types import mlrun_types
+from google_cloud_mldiagnostics.exporters import base_exporter
+from google_cloud_mldiagnostics.exporters import cloud_logging
+from google_cloud_mldiagnostics.exporters import otel_exporter
 from google_cloud_mldiagnostics.utils import host_utils
-import requests
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +54,8 @@ class GlobalRunManager:
           cls._instance._current_logging_client: Optional[  # pyrefly: ignore[bad-assignment]
               logging_client.LoggingClient
           ] = None
+          cls._instance._metrics_exporter = None
+          cls._instance._logs_exporter = None
           cls._instance._control_plane_client: Optional[  # pyrefly: ignore[bad-assignment]
               control_plane_client.ControlPlaneClient
           ] = None
@@ -73,6 +79,9 @@ class GlobalRunManager:
       self._current_logging_client: Optional[logging_client.LoggingClient] = (
           None
       )
+
+      self._metrics_exporter: Optional[base_exporter.BaseMetricsExporter] = None
+      self._logs_exporter: Optional[base_exporter.BaseLogsExporter] = None
       self._control_plane_client: Optional[
           control_plane_client.ControlPlaneClient
       ] = None
@@ -102,9 +111,108 @@ class GlobalRunManager:
         self._accelerator_type = host_utils.get_accelerator_type(
             mlrun.framework, mlrun.serving_engine
         )
+      resource_attributes = {
+          "project_id": mlrun.project,
+          "run_id": mlrun.name,
+          "location": mlrun.location,
+      }
+
       self._current_logging_client = logging_client.LoggingClient(
           project_id=mlrun.project
       )
+
+      metrics_exporter_config = mlrun.metrics_exporter_config or {}
+      mode = metrics_exporter_config.get("mode", ["cloud_logging"])
+      user_config_destinations = metrics_exporter_config.get(
+          "userConfig", ["cloud_logging"]
+      )
+
+      inner_metrics_exporters = []
+      inner_logs_exporters = []
+
+      otel_metrics_exporter = None
+      otel_logs_exporter = None
+      cloud_metrics_exporter = None
+      cloud_logs_exporter = None
+
+      if "otel" in mode:
+        otel_metrics_ok = otel_exporter.OTelMetricsExporter.is_available()
+        otel_logs_ok = otel_exporter.OTelLogsExporter.is_available()
+
+        if otel_metrics_ok:
+          otel_metrics_exporter = otel_exporter.OTelMetricsExporter(
+              resource_attributes
+          )
+          inner_metrics_exporters.append(otel_metrics_exporter)
+          
+        if otel_logs_ok:
+          otel_logs_exporter = otel_exporter.OTelLogsExporter(
+              resource_attributes
+          )
+          inner_logs_exporters.append(otel_logs_exporter)
+          
+        if otel_metrics_ok and otel_logs_ok:
+          logger.info("OpenTelemetry exporting enabled for mode.")
+        else:
+          logger.warning(
+              "OpenTelemetry exporters are not fully available (metrics: %s,"
+              " logs: %s). Falling back to Cloud Logging where unavailable.",
+              otel_metrics_ok,
+              otel_logs_ok,
+          )
+
+      if "cloud_logging" in mode or not inner_metrics_exporters:
+        cloud_metrics_exporter = cloud_logging.CloudLoggingMetricsExporter(
+            resource_attributes, client=self._current_logging_client
+        )
+        inner_metrics_exporters.append(cloud_metrics_exporter)
+        logger.info("Cloud Logging metrics exporting enabled.")
+
+      if "cloud_logging" in mode or not inner_logs_exporters:
+        cloud_logs_exporter = cloud_logging.CloudLoggingLogsExporter(
+            resource_attributes, client=self._current_logging_client
+        )
+        inner_logs_exporters.append(cloud_logs_exporter)
+        logger.info("Cloud Logging logs exporting enabled.")
+
+      # Wrap in composite for uniform handling
+      self._metrics_exporter = base_exporter.CompositeMetricsExporter(
+          inner_metrics_exporters, resource_attributes
+      )
+      self._logs_exporter = base_exporter.CompositeLogsExporter(
+          inner_logs_exporters, resource_attributes
+      )
+
+      # Prepare userConfig exporters
+      user_config_logs_exporters = []
+      if "otel" in user_config_destinations:
+        if otel_logs_exporter:
+          user_config_logs_exporters.append(otel_logs_exporter)
+        else:
+          if otel_exporter.OTelLogsExporter.is_available():
+            user_config_logs_exporters.append(
+                otel_exporter.OTelLogsExporter(resource_attributes)
+            )
+          else:
+            logger.warning(
+                "OpenTelemetry logs dependencies not available for userConfig."
+            )
+
+      if (
+          "cloud_logging" in user_config_destinations
+          or not user_config_logs_exporters
+      ):
+        if cloud_logs_exporter:
+          user_config_logs_exporters.append(cloud_logs_exporter)
+        else:
+          user_config_logs_exporters.append(
+              cloud_logging.CloudLoggingLogsExporter(
+                  resource_attributes, client=self._current_logging_client
+              )
+          )
+
+
+
       self._control_plane_client = control_plane_client.ControlPlaneClient(
           project_id=mlrun.project,
           location=mlrun.location,
@@ -126,26 +234,46 @@ class GlobalRunManager:
         self._initialized = True
         return
 
+      logger.debug(
+          "GlobalRunManager: Checking mlrun.configs: %s", mlrun.configs
+      )
       # Write userConfigs to Cloud Logging if available.
       if (
           mlrun.configs
           and isinstance(mlrun.configs, dict)
           and "userConfigs" in mlrun.configs
-          and self._current_logging_client
       ):
+        logger.debug("GlobalRunManager: userConfigs found in mlrun.configs")
         try:
-          self._current_logging_client.write_metric(
-              metric_name="mlrun_configs",
-              value={"userConfigs": mlrun.configs.get("userConfigs")},
-              run_id=mlrun.name,
-              location=mlrun.location,
-          )
+          if user_config_logs_exporters:
+            logger.debug(
+                "GlobalRunManager: Exporting userConfigs to %d exporters",
+                len(user_config_logs_exporters),
+            )
+            entry = base_exporter.LogEntry(
+                body={"userConfigs": mlrun.configs.get("userConfigs")},
+                labels={
+                    "namespace": "mlrun_configs",
+                }
+            )
+            user_composite_exporter = base_exporter.CompositeLogsExporter(
+                user_config_logs_exporters, resource_attributes
+            )
+            user_composite_exporter.export([entry])
+            user_composite_exporter.force_flush()
+          else:
+            logger.warning("No logs exporters available to export userConfigs.")
         except Exception:  # pylint: disable=broad-exception-caught
           logger.exception(
               "Failed to write configs to Cloud Logging for run: %s",
               mlrun.name,
           )
         del mlrun.configs["userConfigs"]
+      else:
+        logger.debug(
+            "GlobalRunManager: userConfigs NOT found in mlrun.configs or"
+            " invalid type"
+        )
 
       self._create_ml_run_on_control_plane(mlrun)
       self._initialized = True
@@ -473,6 +601,18 @@ class GlobalRunManager:
     """Get the current logging client."""
     with self._lock:
       return self._current_logging_client
+
+  @property
+  def metrics_exporters(self) -> list[base_exporter.BaseMetricsExporter]:
+    """Get the list of metrics exporters."""
+    with self._lock:
+      return [self._metrics_exporter] if self._metrics_exporter else []
+
+  @property
+  def logs_exporters(self) -> list[base_exporter.BaseLogsExporter]:
+    """Get the list of logs exporters."""
+    with self._lock:
+      return [self._logs_exporter] if self._logs_exporter else []
 
   @property
   def control_plane_client(

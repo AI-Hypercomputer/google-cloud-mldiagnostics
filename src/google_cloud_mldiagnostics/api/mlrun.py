@@ -21,6 +21,7 @@ from google_cloud_mldiagnostics.core import create_mlrun
 from google_cloud_mldiagnostics.custom_types import exceptions
 from google_cloud_mldiagnostics.custom_types import mlrun_types
 
+
 def normalize_gcs_path(gcs_path):
   """Normalizes a Google Cloud Storage (GCS) path.
 
@@ -40,7 +41,7 @@ def normalize_gcs_path(gcs_path):
 
   if gcs_path.startswith("gs://"):
     prefix = "gs://"
-    path_part = gcs_path[len(prefix):]
+    path_part = gcs_path[len(prefix) :]
   else:
     prefix = ""
     path_part = gcs_path
@@ -67,6 +68,7 @@ def machinelearning_run(
     serving_engine: mlrun_types.ServingEngine = mlrun_types.ServingEngine.NONE,
     run_workload_id: str | None = None,
     metric_only_run: bool = False,
+    metrics_exporter_config: dict[str, Any] | None = None,
 ) -> mlrun_types.MLRun:
   """Create a new machine learning run.
 
@@ -92,9 +94,11 @@ def machinelearning_run(
       environment: The environment to use for the control plane client
         (autopush, staging, prod). Default is prod.
       framework: The framework used for the ML run. Default is JAX.
+      serving_engine: The serving engine used for the ML run. Default is NONE.
       run_workload_id: Optional shared workload identifier for GCE/Custom
         Orchestrator workloads.
       metric_only_run: Whether to create a metric-only run. Default is False.
+      metrics_exporter_config: Optional configuration for metrics exporter.
 
   Returns:
       MLRun: A new ML run instance
@@ -142,4 +146,5 @@ def machinelearning_run(
       framework=framework,
       serving_engine=serving_engine,
       run_workload_id=run_workload_id,
+      metrics_exporter_config=metrics_exporter_config,
   )

@@ -26,8 +26,8 @@ import threading
 from typing import Any, Callable
 
 from google_cloud_mldiagnostics.clients import control_plane_client
-from google_cloud_mldiagnostics.clients import logging_client
 from google_cloud_mldiagnostics.core import global_manager
+from google_cloud_mldiagnostics.exporters import base_exporter
 from google_cloud_mldiagnostics.custom_types import exceptions
 from google_cloud_mldiagnostics.custom_types import metric_types
 from google_cloud_mldiagnostics.custom_types import mlrun_types
@@ -120,7 +120,7 @@ class _MetricsRecorder:
       item: Mapping[str, Any],
       is_master_host: bool,
       log_system_metrics: bool = False,
-  ) -> dict[str, Any] | None:
+  ) -> base_exporter.MetricPoint | base_exporter.LogEntry | None:
     """Processes a single metric item from the queue.
 
     Args:
@@ -129,7 +129,7 @@ class _MetricsRecorder:
       log_system_metrics: Whether to log system utilization metrics.
 
     Returns:
-      A dictionary representing the metric to be written if it should be
+      A MetricPoint or LogEntry object to be written if it should be
       recorded, otherwise None.
     """
     metric_info = item["metric_info"]
@@ -148,12 +148,12 @@ class _MetricsRecorder:
       )
       return None
 
-    metric_value = self._extract_metric_value(metric_name, value)
-    if metric_value is None:
-      return None
-
-    # Update the metric tracker
-    if metric_name in self._track_list:
+    metric_value = None
+    if not isinstance(value, (dict, str)):
+      metric_value = self._extract_metric_value(metric_name, value)
+    
+    # Update the metric tracker for numeric metrics on ALL hosts
+    if metric_value is not None and metric_name in self._track_list:
       with self._lock:
         tracker = self._metric_tracker[metric_name]
         num_records = tracker["num_records"]
@@ -165,12 +165,24 @@ class _MetricsRecorder:
       all_labels = labels.copy() if labels else {}
       unit = metric_types.METRIC_UNITS.get(metric_name, "1")
       all_labels.setdefault("unit", unit)
-      return {
-          "metric_name": metric_name,
-          "value": metric_value,
-          "step": step,
-          "labels": all_labels,
-      }
+      
+      if metric_value is not None:
+        return base_exporter.MetricPoint(
+            name=metric_name,
+            value=metric_value,
+            step=step,
+            labels=all_labels,
+        )
+      elif isinstance(value, (dict, str)):
+        # Route non-numeric but structured/text payloads as LogEntry
+        # We might want to use metric_name as a namespace label for routing
+        all_labels.setdefault("namespace", metric_name)
+        return base_exporter.LogEntry(
+            body=value,
+            step=step,
+            labels=all_labels,
+        )
+    
     return None
 
   def _flush_metrics_worker(self) -> None:
@@ -189,8 +201,10 @@ class _MetricsRecorder:
           while not self._queue.empty():
             raw_items.append(self._queue.get_nowait())
 
+          logger.debug("_flush_metrics_worker: Processing raw items batch of size %d", len(raw_items))
+
         try:
-          ml_run, logging_client_instance = self._get_active_run_and_client()
+          ml_run, metrics_exporters, logs_exporters = self._get_active_run_and_exporters()
           if self._is_master_host is None:
             self._is_master_host = host_utils.is_master_host(
                 ml_run.framework, ml_run.serving_engine
@@ -206,31 +220,44 @@ class _MetricsRecorder:
         else:
           should_stop = False
           try:
-            metrics_to_write = []
+            metrics_batch: list[base_exporter.MetricPoint] = []
+            logs_batch: list[base_exporter.LogEntry] = []
+            
             for item in raw_items:
               if item is None:
                 should_stop = True
                 continue
 
-              metric_to_write = self._process_single_metric_item(
+              payload = self._process_single_metric_item(
                   item,
                   is_master_host,
                   log_system_metrics=ml_run.log_system_metrics,
               )
-              if metric_to_write:
-                metrics_to_write.append(metric_to_write)
+              
+              if isinstance(payload, base_exporter.MetricPoint):
+                metrics_batch.append(payload)
+              elif isinstance(payload, base_exporter.LogEntry):
+                logs_batch.append(payload)
 
-            if metrics_to_write:
-              try:
-                logging_client_instance.write_metrics(
-                    metrics=metrics_to_write,
-                    run_id=ml_run.name,
-                    location=ml_run.location,
-                )
-              except Exception:  # pylint: disable=broad-exception-caught
-                logger.exception(
-                    "Error publishing async metrics batch: %s", metrics_to_write
-                )
+            if metrics_batch:
+              logger.debug("_flush_metrics_worker: Exporting metrics batch of size %d to %d exporters", len(metrics_batch), len(metrics_exporters))
+              for exporter in metrics_exporters:
+                try:
+                  exporter.export(metrics_batch)
+                except Exception:  # pylint: disable=broad-exception-caught
+                  logger.exception(
+                      "Error publishing async metrics batch to %s", type(exporter).__name__
+                  )
+
+            if logs_batch:
+              logger.debug("_flush_metrics_worker: Exporting logs batch of size %d to %d exporters", len(logs_batch), len(logs_exporters))
+              for exporter in logs_exporters:
+                try:
+                  exporter.export(logs_batch)
+                except Exception:  # pylint: disable=broad-exception-caught
+                  logger.exception(
+                      "Error publishing async logs batch to %s", type(exporter).__name__
+                  )
           finally:
             for _ in raw_items:
               self._queue.task_done()
@@ -251,16 +278,17 @@ class _MetricsRecorder:
         lambda: {"num_records": 0, "avg": 0.0}
     )
 
-  def _get_active_run_and_client(
+  def _get_active_run_and_exporters(
       self,
   ) -> tuple[
       mlrun_types.MLRun,
-      logging_client.LoggingClient,
+      list[base_exporter.BaseMetricsExporter],
+      list[base_exporter.BaseLogsExporter],
   ]:
-    """Get the active run and the logging client.
+    """Get the active run and standard configured exporters.
 
     Returns:
-        A tuple of (MLRun, client).
+        A tuple of (MLRun, metrics_exporters, logs_exporters).
 
     Raises:
         NoActiveRunError: If there's no active run.
@@ -273,13 +301,10 @@ class _MetricsRecorder:
       )
 
     ml_run = manager.run
-    logging_client_instance = manager.logging_client
+    metrics_exporters = manager.metrics_exporters
+    logs_exporters = manager.logs_exporters
 
-    # If logging client is not configured, use a no-op client
-    if logging_client_instance is None:
-      logging_client_instance = logging_client.NoOpLoggingClient()
-
-    if ml_run is None or logging_client_instance is None:
+    if ml_run is None:
       raise exceptions.NoActiveRunError("ML run is not fully initialized.")
 
     # Reset the tracker if the ml run name is changed
@@ -287,7 +312,7 @@ class _MetricsRecorder:
       self._reset_tracker()
       self._ml_run_name = ml_run.name
 
-    return ml_run, logging_client_instance
+    return ml_run, metrics_exporters, logs_exporters
 
   def record(
       self,
