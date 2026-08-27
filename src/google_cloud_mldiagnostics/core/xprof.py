@@ -12,24 +12,186 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""JAX profiling SDK wrapper for Google Cloud ML Diagnostics."""
+"""Profiling SDK wrapper for Google Cloud ML Diagnostics."""
 
+import abc
 import logging
 import threading
 import time
+import typing
 
 from google_cloud_mldiagnostics.core import global_manager
 from google_cloud_mldiagnostics.custom_types import exceptions
 from google_cloud_mldiagnostics.custom_types import mlrun_types
 from google_cloud_mldiagnostics.utils import host_utils
-import jax
+
 
 logger = logging.getLogger(__name__)
 
 
-# Wrapper for programmatic jax profiling
+# ==============================================================================
+# Profiler Engine Strategy / Factory Pattern
+# ==============================================================================
+
+
+class BaseProfilerEngine(abc.ABC):
+  """Abstract interface for framework-specific profiler engines."""
+
+  # --- Programmatic Profiling Methods ---
+  @abc.abstractmethod
+  def start_trace(self, gcs_dir: str, session_id: str) -> typing.Any:
+    """Starts programmatic trace profiling and returns profiler handle."""
+    pass
+
+  @abc.abstractmethod
+  def stop_trace(self, handle: typing.Any, gcs_dir: str = "") -> None:
+    """Stops programmatic trace profiling."""
+    pass
+
+  @abc.abstractmethod
+  def get_trace_context(
+      self, gcs_dir: str, session_id: str
+  ) -> typing.ContextManager[typing.Any]:
+    """Returns framework context manager instance for trace profiling."""
+    pass
+
+  # --- On-Demand Profiling Server Methods ---
+  @abc.abstractmethod
+  def start_server(self, port: int) -> None:
+    """Starts the on-demand profiler server on the specified port."""
+    pass
+
+  @abc.abstractmethod
+  def stop_server(self) -> None:
+    """Stops the on-demand profiler server."""
+    pass
+
+
+class JaxProfilerEngine(BaseProfilerEngine):
+  """Profiler engine implementation for JAX framework."""
+
+  def start_trace(self, gcs_dir: str, session_id: str) -> typing.Any:
+    import jax  # pylint: disable=g-import-not-at-top
+
+    try:
+      options = jax.profiler.ProfileOptions()
+      options.session_id = session_id
+      jax.profiler.start_trace(gcs_dir, profiler_options=options)  # pyrefly: ignore[bad-argument-type]
+      return None
+    except exceptions.ProfilingError as e:
+      logger.error("Error starting JAX profiler: %s", e)
+      raise
+
+  def stop_trace(self, handle: typing.Any, gcs_dir: str = "") -> None:
+    import jax  # pylint: disable=g-import-not-at-top
+
+    try:
+      jax.profiler.stop_trace()
+    except exceptions.ProfilingError as e:
+      logger.error("Error stopping JAX profiler: %s", e)
+      raise
+
+  def get_trace_context(
+      self, gcs_dir: str, session_id: str
+  ) -> typing.ContextManager[typing.Any]:
+    import jax  # pylint: disable=g-import-not-at-top
+
+    options = jax.profiler.ProfileOptions()
+    options.session_id = session_id
+    return jax.profiler.trace(gcs_dir, profiler_options=options)  # pyrefly: ignore[bad-argument-type]
+
+  def start_server(self, port: int) -> None:
+    logger.info("Defaulting to JAX framework for on-demand profiling.")
+    import jax  # pylint: disable=g-import-not-at-top
+
+    jax.profiler.start_server(port)
+
+  def stop_server(self) -> None:
+    import jax  # pylint: disable=g-import-not-at-top
+
+    jax.profiler.stop_server()
+
+
+class PyTorchProfilerEngine(BaseProfilerEngine):
+  """Profiler engine implementation for PyTorch framework."""
+
+  def start_trace(self, gcs_dir: str, session_id: str) -> typing.Any:
+    import torch  # pylint: disable=g-import-not-at-top
+    from torch_tpu._internal.profiler import TpuProfilerConfig  # pylint: disable=g-import-not-at-top # pytype: disable=import-error
+
+    config = TpuProfilerConfig(
+        host_tracer_level=2,
+        device_tracer_level=1,
+        run_dir=gcs_dir,
+    )
+    prof = torch.profiler.profile(
+        activities=[
+            torch.profiler.ProfilerActivity.CPU,
+            torch.profiler.ProfilerActivity.PrivateUse1,
+        ],
+        experimental_config=config,
+    )
+    prof.start()
+    return prof
+
+  def stop_trace(self, handle: typing.Any, gcs_dir: str = "") -> None:
+    if handle is not None:
+      handle.stop()
+    else:
+      logger.warning("No active PyTorch profiler instance found to stop.")
+
+  def get_trace_context(
+      self, gcs_dir: str, session_id: str
+  ) -> typing.ContextManager[typing.Any]:
+    import torch  # pylint: disable=g-import-not-at-top
+    from torch_tpu._internal.profiler import TpuProfilerConfig  # pylint: disable=g-import-not-at-top # pytype: disable=import-error
+
+    config = TpuProfilerConfig(
+        host_tracer_level=2,
+        device_tracer_level=1,
+        run_dir=gcs_dir,
+    )
+    return torch.profiler.profile(
+        activities=[
+            torch.profiler.ProfilerActivity.CPU,
+            torch.profiler.ProfilerActivity.PrivateUse1,
+        ],
+        experimental_config=config,
+    )
+
+  def start_server(self, port: int) -> None:
+    logger.info("Detected PyTorch framework for on-demand profiling.")
+    from torch_tpu._internal.profiler import _impl as profiler  # type: ignore  # pylint: disable=g-import-not-at-top # pytype: disable=import-error
+
+    profiler.start_server(port)
+    logger.info(
+        "Started PyTorch TPU on-demand profiler server on port %d.", port
+    )
+
+  def stop_server(self) -> None:
+    from torch_tpu._internal.profiler import _impl as profiler  # type: ignore  # pylint: disable=g-import-not-at-top # pytype: disable=import-error
+
+    profiler.stop_server()
+    logger.info("Stopped PyTorch TPU on-demand profiler server.")
+
+
+def get_profiler_engine(
+    framework: mlrun_types.Framework | None,
+) -> BaseProfilerEngine:
+  """Returns the appropriate profiler engine based on framework."""
+  if framework == mlrun_types.Framework.PYTORCH:
+    logger.info("Using PyTorchProfilerEngine for profiling.")
+    return PyTorchProfilerEngine()
+  logger.info("Using JaxProfilerEngine for profiling.")
+  return JaxProfilerEngine()
+
+
+# ==============================================================================
+# Main Xprof Wrapper Class
+# ==============================================================================
+
 class Xprof:
-  """Wrapper for JAX profiling with Google Cloud ML Diagnostics.
+  """Wrapper for profiling with Google Cloud ML Diagnostics.
 
   Supports:
   - Object-oriented API (prof.start(), prof.stop())
@@ -63,6 +225,9 @@ class Xprof:
     self._start_time = None
     self._end_time = None
     self._session_phase = None
+    self._profiler_handle = None
+    self._trace_context_manager = None
+    self._engine = None
 
   def _ensure_initialized(self):
     """Lazy initialization - resolve run and setup directories when needed."""
@@ -91,6 +256,10 @@ class Xprof:
     # Set up the GCS directory path
     identifier = self._resolved_run.name
     self._gcs_profile_dir = f"{self._resolved_run.gcs_path}/{identifier}"
+    self._engine = get_profiler_engine(self._resolved_run.framework)
+
+    if self._engine is None:
+      raise exceptions.ProfilingError("Failed to initialize profiling engine.")
 
     logger.info(
         "xprof initialized. Profiling output path set to: %s",
@@ -151,8 +320,27 @@ class Xprof:
           self._session_phase,
       )
 
+  def _update_session_state(
+      self,
+      session_phase: str,
+      log_msg: str | None = None,
+  ) -> None:
+    """Updates profiler session state, timestamps, and optional status log."""
+    self._session_phase = session_phase
+    self._is_profiling = session_phase == "ACTIVE"
+    if self._is_profiling:
+      if self._start_time is None:
+        self._start_time = time.time()
+      self._end_time = None
+    else:
+      self._end_time = time.time()
+    if log_msg:
+      logger.info(
+          "profiling_status: %s (session_phase: %s)" % (log_msg, session_phase)
+      )
+
   def start(self, session_id: str | None = None) -> None:
-    """Starts the JAX profiler.
+    """Starts the profiler.
 
     Args:
         session_id: The session ID to use for the profiling session. If None,
@@ -169,57 +357,57 @@ class Xprof:
       logger.info("profiling_status: skipped")
       return
 
-    logger.info("Starting JAX profiling to: %s", self._gcs_profile_dir)
-    options = jax.profiler.ProfileOptions()
-    self._current_session_id = host_utils.effective_session_id(session_id)
-    options.session_id = self._current_session_id
+    if self._engine is None or self._gcs_profile_dir is None:
+      raise exceptions.ProfilingError("Profiler is not properly initialized.")
+
     self._start_time = time.time()
     self._end_time = None
-    
     try:
-      jax.profiler.start_trace(self._gcs_profile_dir, profiler_options=options)  # pyrefly: ignore[bad-argument-type]
+      self._current_session_id = host_utils.effective_session_id(session_id)
+      self._profiler_handle = self._engine.start_trace(
+          self._gcs_profile_dir, self._current_session_id
+      )
+      self._update_session_state(
+          session_phase="ACTIVE",
+          log_msg="started",
+      )
     except Exception as e:  # pylint: disable=broad-exception-caught
-      self._session_phase = "FAILED"
       logger.error("Error starting JAX profiler: %s", e)
-      self._is_profiling = False
+      self._update_session_state(
+          session_phase="FAILED",
+      )
       self._report_profiler_session(
           create_new_session=True, context_msg="on_start"
       )
       return
-
-    self._session_phase = "ACTIVE"
-    self._is_profiling = True
-
-    logger.info("profiling_status: started")
 
     self._report_profiler_session(
         create_new_session=True, context_msg="on_start"
     )
 
   def stop(self):
-    """Stops the JAX profiler."""
+    """Stops the profiler."""
     if not self._is_profiling:
       logger.warning("No active profiling session to stop.")
       return
 
-    logger.info("Stopping JAX profiling for: %s", self._gcs_profile_dir)
-    self._end_time = time.time()
-    try:
-      jax.profiler.stop_trace()
-    except Exception as e:  # pylint: disable=broad-exception-caught
-      self._session_phase = "FAILED"
-      logger.error("Error stopping JAX profiler: %s", e)
-      self._report_profiler_session(
-          create_new_session=False, context_msg="on_stop"
-      )
+    if self._engine is None or self._gcs_profile_dir is None:
+      logger.warning("Profiler engine or GCS directory is not initialized.")
       return
 
-    self._session_phase = "SUCCEEDED"
-    self._is_profiling = False
-    logger.info("profiling_status: stopped")
-    logger.info(
-        "profiling traces should be available at: %s", self._gcs_profile_dir
-    )
+    try:
+      self._engine.stop_trace(self._profiler_handle, self._gcs_profile_dir)
+      self._update_session_state(
+          session_phase="SUCCEEDED",
+          log_msg="stopped",
+      )
+      logger.info(
+          "profiling traces should be available at: %s", self._gcs_profile_dir
+      )
+    except Exception:  # pylint: disable=broad-exception-caught
+      self._update_session_state(
+          session_phase="FAILED",
+      )
 
     self._report_profiler_session(
         create_new_session=False, context_msg="on_stop"
@@ -227,37 +415,36 @@ class Xprof:
 
   def __enter__(self):
     """Context manager entry point."""
-    # Ensure initialization happens before entering context
     self._ensure_initialized()
     if not self._should_profile():
       logger.info("profiling_status: skipped")
       return self
 
+    if self._engine is None or self._gcs_profile_dir is None:
+      raise exceptions.ProfilingError("Profiler is not properly initialized.")
+
     self._current_session_id = host_utils.effective_session_id(None)
-
-    options = jax.profiler.ProfileOptions()
-    options.session_id = self._current_session_id
-
-    self._trace_context_manager = jax.profiler.trace(
-        self._gcs_profile_dir, profiler_options=options  # pyrefly: ignore[bad-argument-type]
-    )
-    logger.info("Entering xprof context for: %s", self._gcs_profile_dir)
     self._start_time = time.time()
     self._end_time = None
+
     try:
+      self._trace_context_manager = self._engine.get_trace_context(
+          self._gcs_profile_dir, self._current_session_id
+      )
       self._trace_context_manager.__enter__()
+      self._update_session_state(
+          session_phase="ACTIVE",
+          log_msg="context_started",
+      )
     except Exception as e:  # pylint: disable=broad-exception-caught
-      self._session_phase = "FAILED"
       logger.error("Error starting JAX profiler in context manager: %s", e)
-      self._is_profiling = False
+      self._update_session_state(
+          session_phase="FAILED",
+      )
       self._report_profiler_session(
           create_new_session=True, context_msg="on_context_enter"
       )
       return self
-
-    self._session_phase = "ACTIVE"
-    self._is_profiling = True
-    logger.info("profiling_status: context_started")
 
     self._report_profiler_session(
         create_new_session=True, context_msg="on_context_enter"
@@ -268,15 +455,14 @@ class Xprof:
   def __exit__(self, exc_type, exc_val, exc_tb):
     """Context manager exit point."""
     if self._is_profiling:
-      logger.info("Exiting xprof context for: %s", self._gcs_profile_dir)
-      self._end_time = time.time()
-      self._trace_context_manager.__exit__(exc_type, exc_val, exc_tb)
-      if exc_type is None:
-        self._session_phase = "SUCCEEDED"
-      else:
-        self._session_phase = "FAILED"
-      self._is_profiling = False
-      logger.info("profiling_status: context_stopped")
+      if self._trace_context_manager is not None:
+        self._trace_context_manager.__exit__(exc_type, exc_val, exc_tb)
+
+      phase = "SUCCEEDED" if exc_type is None else "FAILED"
+      self._update_session_state(
+          session_phase=phase,
+          log_msg="context_stopped",
+      )
       logger.info(
           "profiling traces should be available at: %s",
           self._gcs_profile_dir,
@@ -290,8 +476,6 @@ class Xprof:
     """Decorator for profiling a function."""
 
     def wrapper(*args, **kwargs):
-      # Ensure initialization happens when the decorated function is called,
-      # not when the decorator is applied
       self._ensure_initialized()
 
       logger.info(
@@ -307,7 +491,10 @@ class Xprof:
     return wrapper
 
 
-# Wrappers for on-demand xprof profiling
+# ==============================================================================
+# Wrappers for On-Demand Xprof Profiling Server
+# ==============================================================================
+
 class _OnDemandXprofManager:
   """Manages the state of the on-demand xprof server to ensure thread safety."""
 
@@ -322,7 +509,13 @@ class _OnDemandXprofManager:
         logger.info(
             "Starting on-demand xprof profiling session on port %s.", port
         )
-        jax.profiler.start_server(port)
+
+        current_run = global_manager.get_current_run()
+        framework = current_run.framework if current_run else None
+
+        engine = get_profiler_engine(framework)
+        engine.start_server(port)
+
         self._started = True
         logger.info("On-demand xprof profiling session started.")
       else:
@@ -333,7 +526,13 @@ class _OnDemandXprofManager:
     with self._lock:
       if self._started:
         logger.info("Stopping on-demand xprof profiling session.")
-        jax.profiler.stop_server()
+
+        current_run = global_manager.get_current_run()
+        framework = current_run.framework if current_run else None
+
+        engine = get_profiler_engine(framework)
+        engine.stop_server()
+
         self._started = False
         logger.info("On-demand xprof profiling session stopped.")
 
@@ -341,13 +540,8 @@ class _OnDemandXprofManager:
 _ondemand_xprof_manager = _OnDemandXprofManager()
 
 
-def start_on_demand_xprof(port):
-  """Starts an xprofz to allow on-demand profiling.
-
-  Args:
-    port: The port to start the on-demand xprof profiling session on. Default is
-      9999.
-  """
+def start_on_demand_xprof(port: int = 9999):
+  """Starts an xprofz to allow on-demand profiling."""
   _ondemand_xprof_manager.start(port)
 
 
