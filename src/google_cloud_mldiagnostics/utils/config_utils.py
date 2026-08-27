@@ -25,6 +25,7 @@ from google_cloud_mldiagnostics.custom_types import mlrun_types
 
 _config_instance = None
 _jax_config_module_cache = None
+_torch_config_module_cache = None
 _libtpu_metric_module_cache = None
 
 logger = logging.getLogger(__name__)
@@ -40,6 +41,18 @@ def _import_jax_config_module():
 
   _jax_config_module_cache = jax_config
   return _jax_config_module_cache
+
+
+def _import_torch_config_module():
+  """Lazy load torch_config module and cache result."""
+  global _torch_config_module_cache
+  if _torch_config_module_cache is not None:
+    return _torch_config_module_cache
+
+  from google_cloud_mldiagnostics.utils.torch_utils import torch_config  # pylint: disable=g-import-not-at-top
+
+  _torch_config_module_cache = torch_config
+  return _torch_config_module_cache
 
 
 def _get_libtpu_version(
@@ -72,9 +85,10 @@ def _get_framework_version(
     return "unknown"
   if framework == mlrun_types.Framework.JAX:
     return _import_jax_config_module().jax_version()
+  elif framework == mlrun_types.Framework.PYTORCH:
+    return _import_torch_config_module().torch_version()
   else:
     return "unknown"
-
 
 
 def _get_xla_flags() -> str:
@@ -199,6 +213,8 @@ def _get_framework_config_instance(
         return None
     elif framework == mlrun_types.Framework.JAX:
       _config_instance = _import_jax_config_module().JaxHardwareConfig()
+    elif framework == mlrun_types.Framework.PYTORCH:
+      _config_instance = _import_torch_config_module().TorchHardwareConfig()
     else:
       logging.warning(
           "Hardware configuration for framework '%s' is not supported.",

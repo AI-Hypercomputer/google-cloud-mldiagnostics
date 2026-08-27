@@ -347,6 +347,7 @@ def get_instance_id() -> str:
 
 
 _jax_host_module_cache = None
+_torch_host_module_cache = None
 
 
 def _import_jax_host_module():
@@ -363,6 +364,21 @@ def _import_jax_host_module():
   return _jax_host_module_cache
 
 
+def _import_torch_host_module():
+  """Lazy load torch_host module and cache result to avoid loading torch."""
+  global _torch_host_module_cache
+  if _torch_host_module_cache is not None:
+    return _torch_host_module_cache
+
+  from google_cloud_mldiagnostics.utils.torch_utils import (  # pylint: disable=g-import-not-at-top
+      torch_host,
+  )
+
+  _torch_host_module_cache = torch_host
+  return _torch_host_module_cache
+
+
+# TODO: [INTERNAL] - Refactor process index detection using OOP design concepts.
 def get_process_index(
     framework: mlrun_types.Framework = mlrun_types.Framework.JAX,
     serving_engine: mlrun_types.ServingEngine = mlrun_types.ServingEngine.NONE,
@@ -375,18 +391,32 @@ def get_process_index(
     if os.environ.get("MLRUN_SKIP_LIBTPU", "False").lower() != "true":
       # TODO: [INTERNAL] - Add support for non-jax workloads.
       return _import_jax_host_module().get_jax_process_index()
+  elif (
+      framework == mlrun_types.Framework.PYTORCH
+      and serving_engine == mlrun_types.ServingEngine.NONE
+  ):
+    torch_rank = _import_torch_host_module().get_torch_process_index()
+    if torch_rank is not None:
+      return torch_rank
 
   # For non-JAX distributed frameworks (like vLLM/PyTorch), check standard env vars.
-  for env_var in ("NODE_RANK", "GROUP_RANK", "RANK", "JOB_COMPLETION_INDEX"):
+  for env_var in (
+      "NODE_RANK",
+      "GROUP_RANK",
+      "RANK",
+      "JOB_COMPLETION_INDEX",
+  ):
     val = os.environ.get(env_var)
     if val is not None:
       try:
         return int(val)
       except ValueError:
         pass
+
   return 0
 
 
+# TODO: [INTERNAL] - Refactor accelerator type detection using OOP design concepts.
 def get_accelerator_type(
     framework: mlrun_types.Framework | None = mlrun_types.Framework.JAX,
     serving_engine: mlrun_types.ServingEngine = mlrun_types.ServingEngine.NONE,
@@ -404,6 +434,16 @@ def get_accelerator_type(
           return jax_acc
       except Exception:  # pylint: disable=broad-exception-caught
         pass
+  elif (
+      framework == mlrun_types.Framework.PYTORCH
+      and serving_engine == mlrun_types.ServingEngine.NONE
+  ):
+    try:
+      torch_acc = _import_torch_host_module().get_accelerator_type()
+      if torch_acc == metric_types.AcceleratorType.TPU:
+        return torch_acc
+    except Exception:  # pylint: disable=broad-exception-caught
+      pass
 
   # 2. Check environment variables
   if any(
