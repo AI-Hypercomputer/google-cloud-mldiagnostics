@@ -296,12 +296,9 @@ class GlobalRunManager:
         "metric_only_run": "true" if mlrun.metric_only_run else "false",
         "accelerator_type": self._accelerator_type.value,
         "framework": mlrun.framework.value.lower(),
-        "serving_engine": (
-            mlrun.serving_engine.value.lower()
-            if mlrun.serving_engine != mlrun_types.ServingEngine.NONE
-            else ""
-        ),
     }
+    if mlrun.serving_engine != mlrun_types.ServingEngine.NONE:
+      labels["serving_engine"] = mlrun.serving_engine.value.lower()
     try:
       response = self._control_plane_client.create_ml_run(  # pyrefly: ignore[missing-attribute]
           name=mlrun.name,
