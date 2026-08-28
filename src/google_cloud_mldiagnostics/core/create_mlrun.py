@@ -70,7 +70,8 @@ def initialize_mlrun(
     framework: mlrun_types.Framework = mlrun_types.Framework.JAX,
     serving_engine: mlrun_types.ServingEngine = mlrun_types.ServingEngine.NONE,
     run_workload_id: str | None = None,
-    metrics_exporter_config: Mapping[str, Any] | None = None,
+    metrics_exporter_config: dict[str, Any] | None = None,
+    accelerator_orchestrator: mlrun_types.AcceleratorOrchestrator = mlrun_types.AcceleratorOrchestrator.NONE,
 ) -> mlrun_types.MLRun:
 
 
@@ -96,12 +97,21 @@ def initialize_mlrun(
       run_workload_id: Optional shared workload identifier for GCE/Custom
         Orchestrator workloads.
       metrics_exporter_config: Optional configuration for metrics exporter.
+      accelerator_orchestrator: The orchestrator managing the ML run workload.
+        Default is NONE, but auto-detected if pathways is used.
 
   Returns:
       The initialized ML run object.
   """
   # Combine default configs with user configs.
-  software_configs = config_utils.get_software_config(framework, serving_engine)
+  software_configs = config_utils.get_software_config(
+      framework, serving_engine, accelerator_orchestrator
+  )
+  accelerator_orchestrator = mlrun_types.AcceleratorOrchestrator(
+      software_configs.get(
+          "accelerator_orchestrator", accelerator_orchestrator.value
+      )
+  )
   hardware_configs = config_utils.get_hardware_config(framework, serving_engine)
   user_configs = configs if configs else {}
   configs = mlrun_types.ConfigDict({
@@ -183,6 +193,7 @@ def initialize_mlrun(
       framework=framework,
       serving_engine=serving_engine,
       metrics_exporter_config=metrics_exporter_config,
+      accelerator_orchestrator=accelerator_orchestrator,
   )
 
 

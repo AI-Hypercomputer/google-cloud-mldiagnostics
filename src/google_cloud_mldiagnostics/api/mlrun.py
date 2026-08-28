@@ -69,6 +69,7 @@ def machinelearning_run(
     run_workload_id: str | None = None,
     metric_only_run: bool = False,
     metrics_exporter_config: dict[str, Any] | None = None,
+    accelerator_orchestrator: mlrun_types.AcceleratorOrchestrator = mlrun_types.AcceleratorOrchestrator.NONE,
 ) -> mlrun_types.MLRun:
   """Create a new machine learning run.
 
@@ -99,6 +100,8 @@ def machinelearning_run(
         Orchestrator workloads.
       metric_only_run: Whether to create a metric-only run. Default is False.
       metrics_exporter_config: Optional configuration for metrics exporter.
+      accelerator_orchestrator: The orchestrator managing the ML run workload.
+        Default is NONE, but auto-detected if pathways is used.
 
   Returns:
       MLRun: A new ML run instance
@@ -147,4 +150,5 @@ def machinelearning_run(
       serving_engine=serving_engine,
       run_workload_id=run_workload_id,
       metrics_exporter_config=metrics_exporter_config,
+      accelerator_orchestrator=accelerator_orchestrator,
   )

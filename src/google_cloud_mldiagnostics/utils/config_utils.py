@@ -15,13 +15,14 @@
 """Utility functions for configurations."""
 
 from collections.abc import Mapping
+from importlib import metadata
 import logging
 import os
-from importlib import metadata
 from typing import Any
 
 from google_cloud_mldiagnostics.custom_types import metric_types
 from google_cloud_mldiagnostics.custom_types import mlrun_types
+
 
 _config_instance = None
 _jax_config_module_cache = None
@@ -59,7 +60,10 @@ def _get_libtpu_version(
     serving_engine: mlrun_types.ServingEngine = mlrun_types.ServingEngine.NONE,
 ):
   """Lazy load libtpu_metric module and cache result."""
-  if serving_engine != mlrun_types.ServingEngine.NONE and serving_engine != mlrun_types.ServingEngine.VLLM:
+  if (
+      serving_engine != mlrun_types.ServingEngine.NONE
+      and serving_engine != mlrun_types.ServingEngine.VLLM
+  ):
     return "n/a"
   global _libtpu_metric_module_cache
   if _libtpu_metric_module_cache is not None:
@@ -96,19 +100,51 @@ def _get_xla_flags() -> str:
   return os.environ.get("XLA_FLAGS", "default")
 
 
+def _is_pathways_orchestrator_detected(
+    framework: mlrun_types.Framework,
+) -> bool:
+  """Detects if Pathways orchestration is used."""
+  if framework != mlrun_types.Framework.JAX:
+    return False
+
+  jax_platforms_env = os.environ.get("JAX_PLATFORMS", "").lower()
+  if "proxy" in jax_platforms_env or "pathways" in jax_platforms_env:
+    return True
+
+  try:
+    import jax  # pylint: disable=g-import-not-at-top
+
+    if jax.config.jax_platforms and (
+        "proxy" in jax.config.jax_platforms
+        or "pathways" in jax.config.jax_platforms
+    ):
+      return True
+  except (ImportError, AttributeError):
+    pass
+
+  return False
+
+
 def get_software_config(
     framework: mlrun_types.Framework = mlrun_types.Framework.JAX,
     serving_engine: mlrun_types.ServingEngine = mlrun_types.ServingEngine.NONE,
+    accelerator_orchestrator: mlrun_types.AcceleratorOrchestrator = mlrun_types.AcceleratorOrchestrator.NONE,
 ) -> dict[str, str]:
   """Returns the software configuration for ML workload."""
   framework_val = framework.value
   if serving_engine != mlrun_types.ServingEngine.NONE:
     framework_val = serving_engine.value
+
+  if accelerator_orchestrator == mlrun_types.AcceleratorOrchestrator.NONE:
+    if _is_pathways_orchestrator_detected(framework):
+      accelerator_orchestrator = mlrun_types.AcceleratorOrchestrator.PATHWAYS
+
   return {
       "framework": framework_val,
       "framework_version": _get_framework_version(framework, serving_engine),
       "xla_flags": _get_xla_flags(),
       "libtpu_version": _get_libtpu_version(serving_engine),
+      "accelerator_orchestrator": accelerator_orchestrator.value,
   }
 
 

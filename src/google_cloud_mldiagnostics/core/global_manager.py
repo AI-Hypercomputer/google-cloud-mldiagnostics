@@ -31,6 +31,7 @@ from google_cloud_mldiagnostics.exporters import cloud_logging
 from google_cloud_mldiagnostics.exporters import otel_exporter
 from google_cloud_mldiagnostics.utils import host_utils
 
+
 logger = logging.getLogger(__name__)
 
 
@@ -144,13 +145,13 @@ class GlobalRunManager:
               resource_attributes
           )
           inner_metrics_exporters.append(otel_metrics_exporter)
-          
+
         if otel_logs_ok:
           otel_logs_exporter = otel_exporter.OTelLogsExporter(
               resource_attributes
           )
           inner_logs_exporters.append(otel_logs_exporter)
-          
+
         if otel_metrics_ok and otel_logs_ok:
           logger.info("OpenTelemetry exporting enabled for mode.")
         else:
@@ -210,8 +211,6 @@ class GlobalRunManager:
                   resource_attributes, client=self._current_logging_client
               )
           )
-
-
 
       self._control_plane_client = control_plane_client.ControlPlaneClient(
           project_id=mlrun.project,
@@ -299,6 +298,14 @@ class GlobalRunManager:
     }
     if mlrun.serving_engine != mlrun_types.ServingEngine.NONE:
       labels["serving_engine"] = mlrun.serving_engine.value.lower()
+
+    if (
+        mlrun.accelerator_orchestrator
+        != mlrun_types.AcceleratorOrchestrator.NONE
+    ):
+      labels["accelerator_orchestrator"] = (
+          mlrun.accelerator_orchestrator.value.lower()
+      )
     try:
       response = self._control_plane_client.create_ml_run(  # pyrefly: ignore[missing-attribute]
           name=mlrun.name,

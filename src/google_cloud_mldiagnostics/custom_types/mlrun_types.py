@@ -45,6 +45,11 @@ class ServingEngine(enum.Enum):
   VLLM = "VLLM"
 
 
+class AcceleratorOrchestrator(enum.Enum):
+  NONE = "NONE"
+  PATHWAYS = "PATHWAYS"
+
+
 class Orchestrator(str, enum.Enum):
   """Enumeration of supported workload orchestrators."""
 
@@ -122,8 +127,8 @@ class MLRun:
   environment: str = ""
   framework: Framework = Framework.JAX
   serving_engine: ServingEngine = ServingEngine.NONE
-  metrics_exporter_config: Mapping[str, Any] | None = None
-
+  metrics_exporter_config: dict[str, Any] | None = None
+  accelerator_orchestrator: AcceleratorOrchestrator = AcceleratorOrchestrator.NONE
 
   def __post_init__(self) -> None:
     gcp.validate_region(self.location)
