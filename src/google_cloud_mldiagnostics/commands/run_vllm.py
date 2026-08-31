@@ -62,6 +62,18 @@ parser.add_argument(
     help="JAX profiler server port.",
     type=int,
 )
+parser.add_argument(
+    "--run_group",
+    default="",
+    help="Diagnostic MLRun Run Group.",
+    type=str,
+)
+parser.add_argument(
+    "--configs",
+    default=None,
+    help="User-defined configurations as a JSON string.",
+    type=str,
+)
 
 
 
@@ -136,9 +148,27 @@ def main(args: List[str] | None):
   os.environ["MLRUN_SKIP_LIBTPU"] = "True"
   os.environ["MLRUN_FRAMEWORK"] = "vllm"
 
+  user_configs = None
+  if diagon_args.configs:
+    try:
+      parsed_configs = json.loads(diagon_args.configs)
+      if isinstance(parsed_configs, dict):
+        user_configs = parsed_configs
+      else:
+        logger.warning(
+            "Expected --configs to be a JSON object (dict), got %s.",
+            type(parsed_configs).__name__,
+        )
+    except json.JSONDecodeError:
+      logger.exception(
+          "Failed to parse --configs as JSON: %s.", diagon_args.configs
+      )
+
   logger.info("Creating mlrun with args: %s", diagon_args)
   run = mlrun.machinelearning_run(
       name=diagon_args.mlrun_name,
+      run_group=diagon_args.run_group,
+      configs=user_configs,
       project=diagon_args.project,
       region=diagon_args.region,
       gcs_path=diagon_args.mlrun_gcs_path,
