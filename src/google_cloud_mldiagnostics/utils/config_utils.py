@@ -139,13 +139,15 @@ def get_software_config(
     if _is_pathways_orchestrator_detected(framework):
       accelerator_orchestrator = mlrun_types.AcceleratorOrchestrator.PATHWAYS
 
-  return {
+  config = {
       "framework": framework_val,
       "framework_version": _get_framework_version(framework, serving_engine),
       "xla_flags": _get_xla_flags(),
       "libtpu_version": _get_libtpu_version(serving_engine),
-      "accelerator_orchestrator": accelerator_orchestrator.value,
   }
+  if accelerator_orchestrator != mlrun_types.AcceleratorOrchestrator.NONE:
+    config["accelerator_orchestrator"] = accelerator_orchestrator.value
+  return config
 
 
 # Hardware configs.
