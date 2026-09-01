@@ -288,9 +288,6 @@ class Xprof:
       self, create_new_session: bool, context_msg: str
   ) -> None:
     """Reports the profiler session to the Control Plane."""
-    if self._resolved_run and self._resolved_run.environment == "prod":
-      return
-
     if self._start_time is None or self._session_phase is None:
       logger.error(
           "Profiler session not set start time or session phase,"
