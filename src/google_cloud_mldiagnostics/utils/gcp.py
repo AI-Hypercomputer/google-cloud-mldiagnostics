@@ -44,6 +44,31 @@ def get_project_id(timeout: int = 5) -> str | None:
     return None
 
 
+def get_instance_metadata(path: str, timeout: int = 5) -> str | None:
+  """Get GCE instance metadata from the metadata server.
+
+  Args:
+      path: Path under computeMetadata/v1/instance/ (e.g. 'zone', 'machine-type',
+        or 'attributes/accelerator-type').
+      timeout: Request timeout in seconds (default: 5)
+
+  Returns:
+      Metadata value string if successful, None if failed
+  """
+  url = f"http://metadata.google.internal/computeMetadata/v1/instance/{path}"
+
+  try:
+    req = urllib.request.Request(url)
+    req.add_header("Metadata-Flavor", "Google")
+
+    with urllib.request.urlopen(req, timeout=timeout) as response:
+      return response.read().decode("utf-8").strip()
+
+  except (urllib.error.URLError, urllib.error.HTTPError, ValueError) as e:
+    logging.warning("Failed to get instance metadata '%s': %s", path, e)
+    return None
+
+
 def get_instance_zone(timeout: int = 5) -> str | None:
   """Get the GCE instance zone from the metadata server.
 
@@ -53,21 +78,12 @@ def get_instance_zone(timeout: int = 5) -> str | None:
   Returns:
       Zone name (e.g., 'us-central1-a') if successful, None if failed
   """
-  url = "http://metadata.google.internal/computeMetadata/v1/instance/zone"
-
-  try:
-    req = urllib.request.Request(url)
-    req.add_header("Metadata-Flavor", "Google")
-
-    with urllib.request.urlopen(req, timeout=timeout) as response:
-      zone_path = response.read().decode("utf-8").strip()
-      # Extract zone name from path, e.g.
-      # "projects/123456789/zones/us-central1-a"
-      return zone_path.split("/")[-1]
-
-  except (urllib.error.URLError, urllib.error.HTTPError, ValueError) as e:
-    logging.warning("Failed to get instance zone: %s", e)
-    return None
+  zone_path = get_instance_metadata("zone", timeout=timeout)
+  if zone_path:
+    # Extract zone name from path, e.g.
+    # "projects/123456789/zones/us-central1-a"
+    return zone_path.split("/")[-1]
+  return None
 
 
 def get_instance_region(timeout: int = 5) -> str | None:
@@ -85,6 +101,46 @@ def get_instance_region(timeout: int = 5) -> str | None:
     parts = zone.split("-")
     if len(parts) >= 3:
       return "-".join(parts[:-1])
+  return None
+
+
+def get_instance_attribute(attribute_name: str, timeout: int = 5) -> str | None:
+  """Get a custom GCE instance attribute from the metadata server.
+
+  Args:
+      attribute_name: The attribute key to fetch (e.g. 'accelerator-type').
+      timeout: Request timeout in seconds (default: 5)
+
+  Returns:
+      Attribute value string if successful, None if failed
+  """
+  return get_instance_metadata(f"attributes/{attribute_name}", timeout=timeout)
+
+
+def get_tpu_accelerator_type(timeout: int = 5) -> str | None:
+  """Get TPU accelerator type from GCE metadata attributes or machine type."""
+  accel_type = get_instance_attribute("accelerator-type", timeout=timeout)
+  if accel_type:
+    return accel_type.split("/")[-1]
+
+  # Check tpu-env attribute (YAML/key-value format)
+  tpu_env = get_instance_attribute("tpu-env", timeout=timeout)
+  if tpu_env:
+    for line in tpu_env.splitlines():
+      match = re.search(
+          r"^\s*(?:ACCELERATOR_TYPE|TPU_ACCELERATOR_TYPE|TPU_TYPE)\s*:\s*['\"]?([^'\"\s]+)['\"]?",
+          line,
+      )
+      if match:
+        return match.group(1).strip()
+
+  # Check machine-type for TPU VM naming (e.g. ct5lp-hightpu-4t -> v5litepod-4)
+  machine_type = get_instance_metadata("machine-type", timeout=timeout)
+  if machine_type:
+    mt = machine_type.split("/")[-1]
+    if "tpu" in mt:
+      return mt
+
   return None
 
 

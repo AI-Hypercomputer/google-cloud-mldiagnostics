@@ -184,12 +184,22 @@ class GpuHardwareConfig:
 
 
 class EnvVarTpuHardwareConfig:
-  """TPU hardware config detector using environment variables."""
+  """TPU hardware config detector using environment variables, GCE metadata, and device nodes."""
 
   def __init__(self):
-    self.tpu_type = os.environ.get("TPU_ACCELERATOR_TYPE", "unknown")
+    import glob  # pylint: disable=g-import-not-at-top
+    from google_cloud_mldiagnostics.utils import gcp  # pylint: disable=g-import-not-at-top
+
+    tpu_type = (
+        os.environ.get("TPU_ACCELERATOR_TYPE")
+        or os.environ.get("TPU_TYPE")
+        or gcp.get_tpu_accelerator_type()
+        or "unknown"
+    )
+    self.tpu_type: str = tpu_type
+
     self.devices_per_slice = "unknown"
-    if "-" in self.tpu_type:
+    if self.tpu_type != "unknown" and "-" in self.tpu_type:
       try:
         cores = int(self.tpu_type.split("-")[-1])
         if self.tpu_type.startswith("v4"):
@@ -199,13 +209,24 @@ class EnvVarTpuHardwareConfig:
       except ValueError:
         pass
 
+    if self.devices_per_slice == "unknown":
+      accel_nodes = glob.glob("/dev/accel[0-9]*")
+      if accel_nodes:
+        self.devices_per_slice = str(len(accel_nodes))
+
+    self._num_slices = (
+        os.environ.get("TPU_NUM_SLICES")
+        or os.environ.get("NUM_SLICES")
+        or "1"
+    )
+
   @property
   def device_type(self) -> str:
     return self.tpu_type
 
   @property
   def num_slices(self) -> str:
-    return "1"
+    return self._num_slices
 
   @property
   def accelerator_type(self) -> str:

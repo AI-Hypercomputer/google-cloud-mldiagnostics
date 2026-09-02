@@ -446,18 +446,30 @@ def get_accelerator_type(
       pass
 
   # 2. Check environment variables
-  if any(
-      var in os.environ
-      for var in ["TPU_NAME", "TPU_ACCELERATOR_TYPE", "JAX_FORCE_TPU_INIT"]
+  if (
+      any(
+          var in os.environ
+          for var in [
+              "TPU_NAME",
+              "TPU_ACCELERATOR_TYPE",
+              "TPU_TYPE",
+              "TPU_LIBRARY_PATH",
+              "JAX_FORCE_TPU_INIT",
+          ]
+      )
+      or os.environ.get("PJRT_DEVICE", "").upper() == "TPU"
   ):
     return metric_types.AcceleratorType.TPU
-  if any(
-      var in os.environ
-      for var in [
-          "CUDA_VISIBLE_DEVICES",
-          "NVIDIA_VISIBLE_DEVICES",
-          "CUDA_VERSION",
-      ]
+  if (
+      any(
+          var in os.environ
+          for var in [
+              "CUDA_VISIBLE_DEVICES",
+              "NVIDIA_VISIBLE_DEVICES",
+              "CUDA_VERSION",
+          ]
+      )
+      or os.environ.get("PJRT_DEVICE", "").upper() in ("GPU", "CUDA")
   ):
     return metric_types.AcceleratorType.GPU
 
@@ -465,14 +477,17 @@ def get_accelerator_type(
   import glob  # pylint: disable=g-import-not-at-top
 
   if (
-      glob.glob("/dev/accel/tpu_*")
-      or os.path.exists("/dev/accel")
+      glob.glob("/dev/accel*")
       or os.path.exists("/usr/lib/libtpu.so")
       or os.path.exists("/lib/libtpu.so")
   ):
     return metric_types.AcceleratorType.TPU
   if glob.glob("/dev/nvidia*") or os.path.exists("/dev/dri/renderD128"):
     return metric_types.AcceleratorType.GPU
+
+  # 4. Check GCE metadata
+  if gcp.get_tpu_accelerator_type() is not None:
+    return metric_types.AcceleratorType.TPU
 
   return metric_types.AcceleratorType.UNKNOWN
 
