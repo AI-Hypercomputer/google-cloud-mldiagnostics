@@ -74,6 +74,13 @@ parser.add_argument(
     help="User-defined configurations as a JSON string.",
     type=str,
 )
+parser.add_argument(
+    "--framework",
+    default=None,
+    choices=["pytorch", "jax", "PYTORCH", "JAX"],
+    help="Underlying ML framework for the workload (default: pytorch).",
+    type=str,
+)
 
 
 
@@ -146,7 +153,19 @@ def main(args: List[str] | None):
   # 1. Update the parent environment for the current process
   os.environ["FORCE_MASTER_HOST"] = "True"
   os.environ["MLRUN_SKIP_LIBTPU"] = "True"
-  os.environ["MLRUN_FRAMEWORK"] = "vllm"
+
+  framework_str = (
+      diagon_args.framework
+      or os.environ.get("MLRUN_FRAMEWORK")
+      or "pytorch"
+  ).upper()
+  try:
+    framework_enum = mlrun_types.Framework[framework_str]
+  except KeyError:
+    logger.warning(
+        "Unknown framework '%s', defaulting to PYTORCH.", framework_str
+    )
+    framework_enum = mlrun_types.Framework.PYTORCH
 
   user_configs = None
   if diagon_args.configs:
@@ -175,6 +194,7 @@ def main(args: List[str] | None):
       environment="prod",
       metrics_record_interval_sec=-1,
       serving_engine=mlrun_types.ServingEngine.VLLM,
+      framework=framework_enum,
   )
 
   # 2. Build a fresh process environment dictionary for the vLLM subprocess
