@@ -209,9 +209,13 @@ def _collect_profile_http(
         f"Sending HTTP profile collection request to {host}:{port} ({url})...",
         flush=True,
     )
+    # Add a 10s buffer over the trace duration to account for start/stop
+    # trace overhead
+    timeout_secs = (duration_in_ms / 1000.0) + 10
     response = requests.post(
         url,
         json={"duration_ms": duration_in_ms, "repository_path": log_dir},
+        timeout=timeout_secs,
     )
     response.raise_for_status()
     print(
