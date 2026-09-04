@@ -27,6 +27,7 @@
 - [How to use](#how-to-use)
   - [Enable Cloud Logging](#enable-cloud-logging)
   - [Enable Debug Logging](#enable-debug-logging)
+  - [Configure Telemetry Exporters (OTel Integration)](#configure-telemetry-exporters-otel-integration)
   - [Creating a machine learning run](#creating-a-machine-learning-run)
   - [Write configs using yaml or json](#write-configs-using-yaml-or-json)
   - [Collect metrics](#collect-metrics)
@@ -76,6 +77,8 @@ and profiles in Cluster Director and Google Kubernetes Engine in the Google
 Cloud console.
 - **Link sharing**: ML Diagnostics allows easy collaboration with shareable
 links for profiles and machine learning run information.
+- **Universal Telemetry Stack Integration**: Log and metric collection setup (OTel, Prometheus, Loki, Grafana).
+
 
 ### Github Repo
 
@@ -431,6 +434,49 @@ Logging, for example:
 ```
 DEBUG:google_cloud_mldiagnostics.core.global_manager:current run details: {'name': 'projects/my-gcp-project/locations/us-central1/mlRuns/my-run-12345', 'gcs_path': 'gs://my-bucket/profiles', ...}
 ```
+### Configure Telemetry Exporters (🆕 OpenTelemetry Integration) {#configure-telemetry-exporters-otel-integration}
+
+**New Feature**: The SDK now supports dual-routing and pluggable telemetry! In addition to standard Google Cloud Logging, you can configure the SDK to export metrics and logs to an OpenTelemetry (OTel) Collector. This is extremely useful for integration with localized monitoring stacks like **Prometheus, Loki, and Grafana**.
+
+#### Prerequisites for OTel Integration
+
+- OpenTelemetry Collector running and accessible from your workload.
+- (Optional) Prometheus, Loki, and Grafana set up to consume data from the OTel Collector.
+
+#### Configuring Exporters in SDK
+
+You can configure the metrics exporter mode and user configuration using the `metrics_exporter_config` parameter in `machinelearning_run`.
+
+> [!TIP]
+> If you are using the **Google Cloud Exporter** in your OpenTelemetry Collector, make sure to configure `default_log_name` in the collector configuration. The Google Cloud exporter requires a log name; if the SDK doesn't provide the `gcp.log_name` attribute, logs will be dropped unless `default_log_name` is set in the collector. See [OpenTelemetry Google Cloud Exporter docs](https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/exporter/googlecloudexporter#log-configuration) for more details.
+
+Example:
+
+```python
+machinelearning_run(
+    # ... other parameters ...
+    metrics_exporter_config={
+        "mode": ["otel", "cloud_logging"], # Export system metrics to both OTel and Cloud Logging
+        "userConfig": ["otel", "cloud_logging"], # Export user metrics to both OTel and Cloud Logging
+    },
+)
+```
+
+By default, if `metrics_exporter_config` is not provided, it defaults to `["cloud_logging"]`.
+
+#### Environment Variables
+
+You can also use environment variables to control OTel integration:
+
+- `DIAGON_ENABLE_OTEL`: Set to `'true'` to enable OTel exporter.
+- `OTEL_EXPORTER_OTLP_ENDPOINT`: The endpoint of the OTel Collector (e.g., `http://otel-collector.diagon.svc.cluster.local:4317`).
+- `OTEL_METRIC_EXPORT_INTERVAL`: Metric export interval in milliseconds (default is `5000`).
+- `OTEL_PYTHON_LOG_LEVEL`: Log level for OTel Python SDK (e.g., `DEBUG`).
+- `OTEL_EXPORTER_OTLP_INSECURE`: Set to `'true'` to disable TLS for OTLP exporter.
+
+> [!IMPORTANT]
+> Ensure the `opentelemetry-sdk` and `opentelemetry-exporter-otlp` packages are installed (or install via `pip install google_cloud_mldiagnostics[otel]`).
+
 
 ### Creating a machine learning run
 
@@ -571,8 +617,8 @@ charts.
 
 The SDK provides two functions for recording metrics: `metrics.record()` for
 capturing individual data points, and `metrics.record_metrics()` for recording
-multiple metrics in a single batch. Both functions write metrics to Cloud
-Logging, enabling subsequent visualization and analysis.
+multiple metrics in a single batch. These functions dispatch metrics to the
+configured exporters (Cloud Logging by default, or OpenTelemetry if enabled).
 
 #### Single metric recording
 
