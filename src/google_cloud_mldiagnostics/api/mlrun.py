@@ -96,7 +96,7 @@ def machinelearning_run(
         (autopush, staging, prod). Default is prod.
       framework: The framework used for the ML run. Default is JAX.
       serving_engine: The serving engine used for the ML run. Default is NONE.
-      run_workload_id: Optional shared workload identifier for GCE/Custom
+      run_workload_id: Optional shared workload identifier for CUSTOM
         Orchestrator workloads.
       metric_only_run: Whether to create a metric-only run. Default is False.
       metrics_exporter_config: Optional configuration for metrics exporter.

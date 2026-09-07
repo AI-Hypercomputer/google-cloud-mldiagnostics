@@ -217,7 +217,7 @@ class ControlPlaneClient:
         artifacts: Artifacts configuration (e.g., gcsPath)
         run_group: Run group grouping identifier
         labels: Custom labels for the run
-        orchestrator: Orchestrator the workload is running on (e.g., GCE, GKE)
+        orchestrator: Orchestrator the workload is running on (e.g., CUSTOM, GKE)
         workload_details: Details about the workload
         workload_targets: Targets for the workload
 
@@ -266,13 +266,13 @@ class ControlPlaneClient:
         if creation_timestamp:
           gke_workload_details["createTime"] = creation_timestamp
         payload["workloadDetails"] = {"gke": gke_workload_details}  # pyrefly: ignore[bad-assignment]
-      elif orchestrator == "GCE" and workload_details:
-        gce_workload_details = {
+      elif orchestrator == "CUSTOM" and workload_details:
+        custom_workload_details = {
             "id": workload_details["id"],
             "display_name": workload_details["display_name"],
             "create_time": workload_details["create_time"],
         }
-        payload["workloadDetails"] = {"gce": gce_workload_details}  # pyrefly: ignore[bad-assignment]
+        payload["workloadDetails"] = {"custom": custom_workload_details}  # pyrefly: ignore[bad-assignment]
       elif orchestrator == "SLURM" and workload_details:
         slurm_workload_details = {
             "jobId": workload_details.get("job_id"),

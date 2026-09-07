@@ -94,7 +94,7 @@ def initialize_mlrun(
       metrics_record_interval_sec: The metrics record interval in seconds.
       framework: The framework used for the run.
       serving_engine: The serving engine used for the run.
-      run_workload_id: Optional shared workload identifier for GCE/Custom
+      run_workload_id: Optional shared workload identifier for CUSTOM
         Orchestrator workloads.
       metrics_exporter_config: Optional configuration for metrics exporter.
       accelerator_orchestrator: The orchestrator managing the ML run workload.
@@ -157,10 +157,10 @@ def initialize_mlrun(
           "Detected Slurm environment but Slurm workload details are missing."
       )
     name = host_utils.get_identifier(orchestrator, workload_details)
-  elif orchestrator == "GCE":
+  elif orchestrator == "CUSTOM":
     if not workload_details:
       raise ValueError(
-          "Detected GCE environment but GCE workload details are missing."
+          "Detected CUSTOM environment but CUSTOM workload details are missing."
       )
     name = host_utils.get_identifier(orchestrator, workload_details)
   else:

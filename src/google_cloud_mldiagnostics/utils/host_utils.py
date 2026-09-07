@@ -97,13 +97,32 @@ def _get_gke_workload_details() -> dict[str, Any] | None:
   return details
 
 
-def _get_gce_workload_details(
+def _get_custom_workload_details(
     run_workload_id: str | None = None,
 ) -> dict[str, Any] | None:
   """Returns workload details if available, otherwise None."""
   workload_id = run_workload_id or os.environ.get("RUN_WORKLOAD_ID")
-  instance_id = get_instance_id()
-  hostname = get_hostname()
+
+  # CUSTOM orchestrator type serves as a catch-all for any environment not
+  # natively recognized (including local laptops, on-prem clusters,
+  # and non-GCE VMs). We must provide safe string fallbacks because fetching
+  # Google-specific metadata like instance_id will fail in these scenarios.
+  try:
+    instance_id = get_instance_id()
+  except (RuntimeError, requests.exceptions.RequestException) as e:
+    logger.info(
+        "Could not fetch instance ID from metadata server: %s. Using fallback"
+        " instance ID.",
+        e,
+    )
+    instance_id = "unknown-instance-id"
+
+  try:
+    hostname = get_hostname()
+  except OSError as e:
+    logger.info("Could not fetch hostname: %s. Using fallback hostname.", e)
+    hostname = "unknown-hostname"
+
   details = {
       "id": workload_id if workload_id else instance_id,
       "display_name": workload_id if workload_id else hostname,
@@ -115,7 +134,7 @@ def _get_gce_workload_details(
   return details
 
 
-def _gce_workload_targets(
+def _custom_workload_targets(
     workload_details: dict[str, Any] | None,
 ) -> list[dict[str, Any]] | None:
   """Returns workload targets if available, otherwise None."""
@@ -268,11 +287,11 @@ def _gke_run_identifier(workload_details: dict[str, Any]) -> str:
   return _get_sha256_hash(identifier)
 
 
-def _gce_run_identifier(workload_details: dict[str, Any]) -> str:
-  """Returns the unique identifier for the gce workload."""
+def _custom_run_identifier(workload_details: dict[str, Any]) -> str:
+  """Returns the unique identifier for the custom workload."""
   if not workload_details:
     raise ValueError(
-        "Could not generate GCE workload identifier due to missing workload"
+        "Could not generate CUSTOM workload identifier due to missing workload"
         " details."
     )
   if workload_details.get("_is_workload_id_set"):
@@ -282,7 +301,7 @@ def _gce_run_identifier(workload_details: dict[str, Any]) -> str:
   missing_keys = [k for k in required_keys if not workload_details.get(k)]
   if missing_keys:
     raise ValueError(
-        "Could not generate GCE workload identifier due to missing properties:"
+        "Could not generate CUSTOM workload identifier due to missing properties:"
         f" {', '.join(missing_keys)}."
     )
   identifier = f"{workload_details['id']}_{workload_details['create_time']}"
@@ -323,7 +342,7 @@ def _slurm_run_identifier(workload_details: dict[str, Any]) -> str:
 # Public functions
 def get_hostname() -> str:
   """Returns hostname or pod name of the current machine."""
-  # HOSTNAME is set in GCE and GKE.
+  # HOSTNAME is set in CUSTOM and GKE.
   # Fallback to socket.gethostname() for non-containerized environments.
   return os.environ.get("HOSTNAME") or socket.gethostname()
 
@@ -485,7 +504,7 @@ def get_accelerator_type(
   if glob.glob("/dev/nvidia*") or os.path.exists("/dev/dri/renderD128"):
     return metric_types.AcceleratorType.GPU
 
-  # 4. Check GCE metadata
+  # 4. Check CUSTOM metadata
   if gcp.get_tpu_accelerator_type() is not None:
     return metric_types.AcceleratorType.TPU
 
@@ -514,8 +533,8 @@ def get_workload_details(
   if orchestrator == "SLURM":
     return _get_slurm_workload_details()
 
-  if orchestrator == "GCE":
-    return _get_gce_workload_details(run_workload_id)
+  if orchestrator == "CUSTOM":
+    return _get_custom_workload_details(run_workload_id)
 
   return _get_gke_workload_details()
 
@@ -527,8 +546,8 @@ def get_identifier(
   if orchestrator == "SLURM":
     return _slurm_run_identifier(workload_details)  # pyrefly: ignore[bad-argument-type]
 
-  if orchestrator == "GCE":
-    return _gce_run_identifier(workload_details)  # pyrefly: ignore[bad-argument-type]
+  if orchestrator == "CUSTOM":
+    return _custom_run_identifier(workload_details)  # pyrefly: ignore[bad-argument-type]
 
   return _gke_run_identifier(workload_details)  # pyrefly: ignore[bad-argument-type]
 
@@ -539,8 +558,8 @@ def get_workload_targets(
   if orchestrator == "SLURM":
     return _slurm_workload_targets()
 
-  if orchestrator == "GCE":
-    return _gce_workload_targets(workload_details)
+  if orchestrator == "CUSTOM":
+    return _custom_workload_targets(workload_details)
 
   return None
 
