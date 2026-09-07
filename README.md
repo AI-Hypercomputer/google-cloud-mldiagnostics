@@ -38,10 +38,11 @@
   - [Package Workload with SDK with Dockerfile for GKE](#package-workload-with-sdk-with-dockerfile-for-gke)
   - [Deploy Workload with SDK integrated](#deploy-workload-with-sdk-integrated)
 - [Using ML Diagnostics with Maxtext](#using-ml-diagnostics-with-maxtext)
+- [Using ML Diagnostics with vLLM](#using-ml-diagnostics-with-vllm)
 
 ## Overview
 
-**Note:** Google Cloud ML Diagnostics supports JAX on Google Cloud TPUs and GPUs today.
+**Note:** Google Cloud ML Diagnostics supports JAX and vLLM on Google Cloud TPUs and GPUs today.
 
 Google Cloud ML Diagnostics is an end-to-end managed platform for optimizing
 and diagnosing AI/ML workloads on Google Cloud. The platform lets you collect
@@ -723,7 +724,7 @@ XLA, Tensorflow) for profile collection so you can use the same profile capture
 code across all frameworks. All the profile sessions will be captured in the GCS
 bucket defined in the machine learning run.
 
-**Note:** Google Cloud ML Diagnostics supports JAX on Google Cloud TPUs and GPUs (support for other frameworks like vllm, sglang, Torch TPU, etc will come in the future).
+**Note:** Google Cloud ML Diagnostics supports JAX and vLLM on Google Cloud TPUs and GPUs (support for other frameworks like sglang, Torch TPU, etc will come in the future).
 
 ```python
 # Support collection via APIs
@@ -1004,3 +1005,89 @@ python3 -m MaxText.train src/MaxText/configs/base.yml run_name="demo-mldiagnosti
 ```
 
 `upload_all_profiler_results=True` captures multihost profiles from all hosts.
+
+## Using ML Diagnostics with vLLM
+
+ML Diagnostics provides a built-in wrapper command, `google_cloud_mldiagnostics.commands.run_vllm`, to run vLLM serving and inference workloads with ML Diagnostics telemetry and profiling enabled on Google Cloud TPUs and GPUs.
+
+The `run_vllm` wrapper:
+- Creates and registers a managed Machine Learning Run (`MLRun`) with `serving_engine="VLLM"`.
+- Configures profiler environment variables (`USE_JAX_PROFILER_SERVER`, `JAX_PROFILER_SERVER_PORT`, `PHASED_PROFILING_DIR`, and `VLLM_TORCH_PROFILER_DIR`) and updates profiler output paths to organize profiles under `<mlrun_gcs_path>/<run_name>/plugins/profile/`.
+- Forwards all remaining command-line arguments directly to `vllm`.
+
+### `run_vllm` Command-Line Arguments
+
+- `--mlrun_name` (Required): Unique identifier for the MLRun.
+- `--mlrun_gcs_path` (Required): Google Cloud Storage bucket path where profiler traces and artifacts are saved (e.g., `gs://my-bucket/vllm-profiles`).
+- `--project` (Optional): Google Cloud Project ID.
+- `--region` (Optional): Region where the MLRun metadata is stored (default: `us-central1`).
+- `--run_group` (Optional): Identifier used to group multiple related runs.
+- `--configs` (Optional): User-defined configurations passed as a JSON object string (e.g., `'{"user":"my-team", "running_on":"TPU"}'`).
+- `--framework` (Optional): Underlying ML framework for the workload (`pytorch` or `jax`, default: `pytorch`).
+- `--jax_profiler_port` (Optional): JAX profiler server port (default: `9999`).
+
+### 1. Prepare Docker Image for vLLM
+
+Below is an example `Dockerfile` for packaging a vLLM TPU image with the ML Diagnostics SDK:
+
+```dockerfile
+FROM vllm/vllm-tpu:latest
+WORKDIR /app
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir \
+        google-cloud-mldiagnostics \
+        xprof \
+        google-cloud-logging \
+        packaging \
+        tensorflow-cpu
+EXPOSE 8000 9999
+ENTRYPOINT ["python3", "-m", "google_cloud_mldiagnostics.commands.run_vllm"]
+CMD ["--help"]
+```
+
+### 2. Run vLLM with ML Diagnostics
+
+You can run the container on GKE or GCE by passing the MLRun arguments along with your standard `vllm serve` arguments:
+
+```bash
+docker run --name vllm_diagnostics -d --privileged --net=host \
+  -e HF_HUB_DISABLE_XET=1 \
+  -e USE_MOE_EP_KERNEL=1 \
+  -e PJRT_DEVICE=TPU \
+  -e ENABLE_GOOGLE_DIAGON_ML_DIAGNOSTICS=True \
+  -e VLLM_LOGGING_LEVEL=DEBUG \
+  -e VLLM_TORCH_PROFILER_DIR="gs://<your_gcs_bucket>/vllm_profiles" \
+  -e PHASED_PROFILING_DIR="gs://<your_gcs_bucket>/vllm_profiles" \
+  -e PYTHONUNBUFFERED=1 \
+  -e PHASED_PROFILER_NUM_STEPS_TO_PROFILE_FOR=100 \
+  -e HF_TOKEN="<your_hf_token>" \
+  -e HUGGING_FACE_HUB_TOKEN="<your_hf_token>" \
+  <your_vllm_image> \
+  --mlrun_name="vllm-tpu-run" \
+  --run_group="vllm-benchmark" \
+  --configs='{"user":"ml-team", "running_on":"TPU"}' \
+  --mlrun_gcs_path="gs://<your_gcs_bucket>/vllm_profiles" \
+  --project="<your_project_id>" \
+  --region="us-central1" \
+  serve Qwen/Qwen2-1.5B \
+  --kv-cache-dtype=fp8 \
+  --tensor-parallel-size=1 \
+  --data-parallel-size=1 \
+  --max-model-len=2048 \
+  --max-num-batched-tokens=2048 \
+  --max-num-seqs=64 \
+  --no-enable-prefix-caching \
+  --block-size=256 \
+  --gpu-memory-utilization=0.95 \
+  --port=8000 \
+  --profiler-config.profiler=torch \
+  --profiler-config.torch_profiler_dir="gs://<your_gcs_bucket>/vllm_profiles"
+```
+
+### 3. Profiling vLLM Workloads
+
+You can capture profiler traces from your vLLM workload using any of the following methods:
+
+1. **Phased Profiling**: When `ENABLE_GOOGLE_DIAGON_ML_DIAGNOSTICS=True` and `PHASED_PROFILING_DIR` are configured, profiling is automatically captured across different inference workload phases (such as `PREFILL_ONLY`, `PREFILL_HEAVY`, `BALANCED`, and `DECODE_HEAVY`) for the number of steps specified by `PHASED_PROFILER_NUM_STEPS_TO_PROFILE_FOR`.
+2. **Manual (API-Triggered) Profiling**: You can programmatically trigger and stop profiling sessions by sending HTTP requests to vLLM's `/start_profile` and `/stop_profile` API endpoints while generating load against the server.
+3. **On-Demand UI Profiling**: Capture profile sessions directly from the **Profiles** tab of your MLRun in the Google Cloud Console (Cluster Director or GKE AI/ML Diagnostics UI).
