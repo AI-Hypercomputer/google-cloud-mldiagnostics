@@ -14,7 +14,7 @@
 
 [project]
 name = "google-cloud-mldiagnostics"
-version = "1.0.7"
+version = "1.0.8"
 description = "diagnostic packages for profiling and ML experiment management"
 authors = [
     {name = "Google Diagon++", email = "hypercompute-diagon@google.com"}
@@ -39,6 +39,9 @@ dependencies = [
   "packaging>=24.0",
   "pynvml>=11.5.0",
 ]
+
+[project.urls]
+Repository = "https://github.com/AI-Hypercomputer/google-cloud-mldiagnostics"
 
 [project.optional-dependencies]
 otel = [

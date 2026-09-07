@@ -42,6 +42,9 @@
 
 ## Overview
 
+[**Release Notes**](https://github.com/AI-Hypercomputer/google-cloud-mldiagnostics/blob/main/docs/release_notes.md)
+
+
 **Note:** Google Cloud ML Diagnostics supports JAX and vLLM on Google Cloud TPUs and GPUs today.
 
 Google Cloud ML Diagnostics is an end-to-end managed platform for optimizing
@@ -122,6 +125,7 @@ The Google Service Account used by your workload requires the following IAM role
 1. `roles/clusterdirector.editor`: For full access to create and manage MLRun resources and view the user interface.
 1. `roles/logging.logWriter`: To write logs and metrics to Google Cloud Logging.
 1. `roles/storage.objectUser`: To save profiles to the GCS bucket specified in `machinelearning_run`.
+1. `roles/storage.bucketViewer`: To view the GCS bucket metadata for uploading profiles.
 
 For read-only access (viewing UI only, not creating MLRuns), `roles/clusterdirector.viewer` is sufficient.
 
