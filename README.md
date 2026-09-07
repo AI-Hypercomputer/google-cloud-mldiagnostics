@@ -27,7 +27,7 @@
 - [How to use](#how-to-use)
   - [Enable Cloud Logging](#enable-cloud-logging)
   - [Enable Debug Logging](#enable-debug-logging)
-  - [Configure Telemetry Exporters (OTel Integration)](#configure-telemetry-exporters-otel-integration)
+  - [Configure Telemetry Exporters for OTel Integration](#configure-telemetry-exporters-for-otel-integration)
   - [Creating a machine learning run](#creating-a-machine-learning-run)
   - [Write configs using yaml or json](#write-configs-using-yaml-or-json)
   - [Collect metrics](#collect-metrics)
@@ -439,7 +439,7 @@ Logging, for example:
 ```
 DEBUG:google_cloud_mldiagnostics.core.global_manager:current run details: {'name': 'projects/my-gcp-project/locations/us-central1/mlRuns/my-run-12345', 'gcs_path': 'gs://my-bucket/profiles', ...}
 ```
-### Configure Telemetry Exporters (🆕 OpenTelemetry Integration) {#configure-telemetry-exporters-otel-integration}
+### Configure Telemetry Exporters for OTel Integration
 
 **New Feature**: The SDK now supports dual-routing and pluggable telemetry! In addition to standard Google Cloud Logging, you can configure the SDK to export metrics and logs to an OpenTelemetry (OTel) Collector. This is extremely useful for integration with localized monitoring stacks like **Prometheus, Loki, and Grafana**.
 
