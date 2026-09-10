@@ -161,17 +161,17 @@ class PyTorchProfilerEngine(BaseProfilerEngine):
 
   def start_server(self, port: int) -> None:
     logger.info("Detected PyTorch framework for on-demand profiling.")
-    from torch_tpu._internal.profiler import _impl as profiler  # type: ignore  # pylint: disable=g-import-not-at-top # pytype: disable=import-error
+    from torch_tpu._internal.profiler import start_server  # pyrefly: ignore[missing-import] # pylint: disable=g-import-not-at-top
 
-    profiler.start_server(port)
+    start_server(port)
     logger.info(
         "Started PyTorch TPU on-demand profiler server on port %d.", port
     )
 
   def stop_server(self) -> None:
-    from torch_tpu._internal.profiler import _impl as profiler  # type: ignore  # pylint: disable=g-import-not-at-top # pytype: disable=import-error
+    from torch_tpu._internal.profiler import stop_server  # pyrefly: ignore[missing-import] # pylint: disable=g-import-not-at-top
 
-    profiler.stop_server()
+    stop_server()
     logger.info("Stopped PyTorch TPU on-demand profiler server.")
 
 
