@@ -139,7 +139,7 @@ def initialize_mlrun(
 
   # Generate display name and name for the MLRun.
   display_name = name
-  if orchestrator == "GKE":
+  if orchestrator == mlrun_types.Orchestrator.GKE:
     if not workload_details:
       raise ValueError(
           "Detected GKE environment but GKE metadata is missing. This might"
@@ -151,13 +151,13 @@ def initialize_mlrun(
           " https://github.com/AI-Hypercomputer/google-cloud-mldiagnostics?tab=readme-ov-file#configure-gke-cluster."
       )
     name = host_utils.get_identifier(orchestrator, workload_details)
-  elif orchestrator == "SLURM":
+  elif orchestrator == mlrun_types.Orchestrator.SLURM:
     if not workload_details:
       raise ValueError(
           "Detected Slurm environment but Slurm workload details are missing."
       )
     name = host_utils.get_identifier(orchestrator, workload_details)
-  elif orchestrator == "CUSTOM":
+  elif orchestrator == mlrun_types.Orchestrator.CUSTOM:
     if not workload_details:
       raise ValueError(
           "Detected CUSTOM environment but CUSTOM workload details are missing."
@@ -218,7 +218,7 @@ def initialize_mlrun(
       xprof_url,
   )
 
-  if orchestrator == "GKE":
+  if orchestrator == mlrun_types.Orchestrator.GKE:
     gke_url = create_gke_url(region, project, sanitized_name)  # pyrefly: ignore[bad-argument-type]
     logging.info(
         "GKE detail view URL: %s : %s",

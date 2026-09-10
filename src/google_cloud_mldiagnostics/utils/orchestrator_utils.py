@@ -42,7 +42,7 @@ def _fetch_gcp_metadata(path: str) -> requests.Response | None:
 
 def detect_orchestrator():
   """Detects the orchestrator the workload is running on."""
-  orchestrator = mlrun_types.Orchestrator.CUSTOM.value
+  orchestrator = mlrun_types.Orchestrator.CUSTOM
 
   # Check for CUSTOM Metadata Server to determine if running on GCP
   response = _fetch_gcp_metadata('instance/id')
@@ -70,7 +70,7 @@ def detect_orchestrator():
         is_gke = True
 
     if is_gke:
-      orchestrator = mlrun_types.Orchestrator.GKE.value
+      orchestrator = mlrun_types.Orchestrator.GKE
     elif (
         os.getenv('SLURM_CLUSTER_NAME')
         and os.getenv('SLURM_JOB_ID')
@@ -79,6 +79,6 @@ def detect_orchestrator():
             or os.getenv('SLURM_JOB_START_TIME')
         )
     ):
-      orchestrator = mlrun_types.Orchestrator.SLURM.value
+      orchestrator = mlrun_types.Orchestrator.SLURM
 
   return orchestrator

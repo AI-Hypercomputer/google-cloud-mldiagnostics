@@ -24,9 +24,11 @@ from typing import Any, Dict, List, Optional
 
 import google.auth
 from google.auth.transport import requests as google_auth_requests
+from google_cloud_mldiagnostics.custom_types import mlrun_types
 from google_cloud_mldiagnostics.utils import gcp
 from google_cloud_mldiagnostics.utils import host_utils
 import requests
+
 
 logger = logging.getLogger(__name__)
 _MAX_RETRIES = 3
@@ -249,7 +251,7 @@ class ControlPlaneClient:
 
     if orchestrator:
       payload["orchestrator"] = orchestrator
-      if orchestrator == "GKE" and workload_details:
+      if orchestrator == mlrun_types.Orchestrator.GKE and workload_details:
         gke_workload_details = {
             "id": workload_details["id"],
             "kind": workload_details["kind"],
@@ -266,14 +268,14 @@ class ControlPlaneClient:
         if creation_timestamp:
           gke_workload_details["createTime"] = creation_timestamp
         payload["workloadDetails"] = {"gke": gke_workload_details}  # pyrefly: ignore[bad-assignment]
-      elif orchestrator == "CUSTOM" and workload_details:
+      elif orchestrator == mlrun_types.Orchestrator.CUSTOM and workload_details:
         custom_workload_details = {
             "id": workload_details["id"],
             "display_name": workload_details["display_name"],
             "create_time": workload_details["create_time"],
         }
         payload["workloadDetails"] = {"custom": custom_workload_details}  # pyrefly: ignore[bad-assignment]
-      elif orchestrator == "SLURM" and workload_details:
+      elif orchestrator == mlrun_types.Orchestrator.SLURM and workload_details:
         slurm_workload_details = {
             "jobId": workload_details.get("job_id"),
             "cluster": workload_details.get("cluster"),

@@ -530,10 +530,10 @@ def get_workload_details(
     orchestrator: str = "GKE", run_workload_id: str | None = None
 ) -> dict[str, Any] | None:
   """Returns workload details if available, otherwise None."""
-  if orchestrator == "SLURM":
+  if orchestrator == mlrun_types.Orchestrator.SLURM:
     return _get_slurm_workload_details()
 
-  if orchestrator == "CUSTOM":
+  if orchestrator == mlrun_types.Orchestrator.CUSTOM:
     return _get_custom_workload_details(run_workload_id)
 
   return _get_gke_workload_details()
@@ -543,10 +543,10 @@ def get_identifier(
     orchestrator: str = "GKE", workload_details: dict[str, Any] | None = None
 ) -> str:
   """Returns a unique SHA-256 identifier for the workload."""
-  if orchestrator == "SLURM":
+  if orchestrator == mlrun_types.Orchestrator.SLURM:
     return _slurm_run_identifier(workload_details)  # pyrefly: ignore[bad-argument-type]
 
-  if orchestrator == "CUSTOM":
+  if orchestrator == mlrun_types.Orchestrator.CUSTOM:
     return _custom_run_identifier(workload_details)  # pyrefly: ignore[bad-argument-type]
 
   return _gke_run_identifier(workload_details)  # pyrefly: ignore[bad-argument-type]
@@ -555,10 +555,10 @@ def get_identifier(
 def get_workload_targets(
     orchestrator: str = "GKE", workload_details: dict[str, Any] | None = None
 ) -> list[dict[str, Any]] | None:
-  if orchestrator == "SLURM":
+  if orchestrator == mlrun_types.Orchestrator.SLURM:
     return _slurm_workload_targets()
 
-  if orchestrator == "CUSTOM":
+  if orchestrator == mlrun_types.Orchestrator.CUSTOM:
     return _custom_workload_targets(workload_details)
 
   return None

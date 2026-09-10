@@ -219,7 +219,7 @@ class GlobalRunManager:
       )
 
       if (
-          mlrun.orchestrator == mlrun_types.Orchestrator.GKE.value
+          mlrun.orchestrator == mlrun_types.Orchestrator.GKE
           and not host_utils.is_master_host(
               mlrun.framework, mlrun.serving_engine
           )
