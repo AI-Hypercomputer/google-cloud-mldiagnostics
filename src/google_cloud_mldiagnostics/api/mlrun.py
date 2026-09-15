@@ -69,7 +69,15 @@ def machinelearning_run(
     run_workload_id: str | None = None,
     metric_only_run: bool = False,
     metrics_exporter_config: dict[str, Any] | None = None,
-    accelerator_orchestrator: mlrun_types.AcceleratorOrchestrator = mlrun_types.AcceleratorOrchestrator.NONE,
+    accelerator_orchestrator: mlrun_types.AcceleratorOrchestrator = (
+        mlrun_types.AcceleratorOrchestrator.NONE
+    ),
+    application_framework: mlrun_types.ApplicationFramework | str = (
+        mlrun_types.ApplicationFramework.NONE
+    ),
+    rl_orchestrator: mlrun_types.RlOrchestrator | str = (
+        mlrun_types.RlOrchestrator.NONE
+    ),
 ) -> mlrun_types.MLRun:
   """Create a new machine learning run.
 
@@ -102,6 +110,10 @@ def machinelearning_run(
       metrics_exporter_config: Optional configuration for metrics exporter.
       accelerator_orchestrator: The orchestrator managing the ML run workload.
         Default is NONE, but auto-detected if pathways is used.
+      application_framework: The application framework used for the ML run
+        (e.g., MAXTEXT, AXLEARN, MAXDIFFUSION). Default is NONE.
+      rl_orchestrator: The RL orchestrator used for the ML run (e.g., TUNIX).
+        Default is NONE.
 
   Returns:
       MLRun: A new ML run instance
@@ -132,6 +144,41 @@ def machinelearning_run(
         "environment must be one of 'autopush', 'staging', or 'prod'."
     )
 
+  if application_framework is None:
+    application_framework = mlrun_types.ApplicationFramework.NONE
+  elif isinstance(application_framework, str):
+    try:
+      application_framework = mlrun_types.ApplicationFramework[
+          application_framework.upper()
+      ]
+    except KeyError as exc:
+      raise exceptions.MLRunConfigurationError(
+          f"Invalid application_framework: '{application_framework}'. Supported"
+          " values are:"
+          f" {[e.value for e in mlrun_types.ApplicationFramework]}"
+      ) from exc
+  elif not isinstance(application_framework, mlrun_types.ApplicationFramework):
+    raise exceptions.MLRunConfigurationError(
+        f"Invalid application_framework: {application_framework!r}. Expected"
+        " mlrun_types.ApplicationFramework or str."
+    )
+
+  if rl_orchestrator is None:
+    rl_orchestrator = mlrun_types.RlOrchestrator.NONE
+  elif isinstance(rl_orchestrator, str):
+    try:
+      rl_orchestrator = mlrun_types.RlOrchestrator[rl_orchestrator.upper()]
+    except KeyError as exc:
+      raise exceptions.MLRunConfigurationError(
+          f"Invalid rl_orchestrator: '{rl_orchestrator}'. Supported values"
+          f" are: {[e.value for e in mlrun_types.RlOrchestrator]}"
+      ) from exc
+  elif not isinstance(rl_orchestrator, mlrun_types.RlOrchestrator):
+    raise exceptions.MLRunConfigurationError(
+        f"Invalid rl_orchestrator: {rl_orchestrator!r}. Expected"
+        " mlrun_types.RlOrchestrator or str."
+    )
+
   gcs_path = normalize_gcs_path(gcs_path)
 
   return create_mlrun.initialize_mlrun(
@@ -151,4 +198,6 @@ def machinelearning_run(
       run_workload_id=run_workload_id,
       metrics_exporter_config=metrics_exporter_config,
       accelerator_orchestrator=accelerator_orchestrator,
+      application_framework=application_framework,
+      rl_orchestrator=rl_orchestrator,
   )

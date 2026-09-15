@@ -306,6 +306,22 @@ class GlobalRunManager:
       labels["accelerator_orchestrator"] = (
           mlrun.accelerator_orchestrator.value.lower()
       )
+
+    if (
+        mlrun.application_framework
+        != mlrun_types.ApplicationFramework.NONE
+    ):
+      labels["application_framework"] = (
+          mlrun.application_framework.value.lower()
+      )
+
+    if (
+        mlrun.rl_orchestrator
+        != mlrun_types.RlOrchestrator.NONE
+    ):
+      labels["rl_orchestrator"] = (
+          mlrun.rl_orchestrator.value.lower()
+      )
     try:
       response = self._control_plane_client.create_ml_run(  # pyrefly: ignore[missing-attribute]
           name=mlrun.name,
