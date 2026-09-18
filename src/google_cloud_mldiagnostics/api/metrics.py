@@ -63,9 +63,10 @@ def record_metrics(
 
   Args:
       metrics_data: A list of dictionaries, where each dictionary represents a
-        metric and contains 'metric_name' (MetricType or str) and 'value'
-        (int, float, or list), and optionally 'step' (int) and 'labels'
-        (dict).
+        metric and contains 'metric_name' (MetricType or str) and 'value' (int,
+        float, or list), and optionally 'step' (int) and 'labels' (dict).
+        Timestamps are captured by the SDK when the metric is recorded and
+        cannot be supplied by the caller.
       record_on_all_hosts: Whether to record metrics on all hosts.
       step: Optional step number to apply to all metrics that don't have one.
 
@@ -81,11 +82,12 @@ def record_metrics(
   """
   processed_metrics_data = []
   for metric_info in metrics_data:
-    metric_name = metric_info.get("metric_name")
+    info = dict(metric_info)
+    metric_name = info.get("metric_name")
     if isinstance(metric_name, metric_types.MetricType):
-      metric_info["metric_name"] = metric_name.value
-    if step is not None and "step" not in metric_info:
-      metric_info["step"] = step
-    processed_metrics_data.append(metric_info)
+      info["metric_name"] = metric_name.value
+    if step is not None and "step" not in info:
+      info["step"] = step
+    processed_metrics_data.append(info)
 
   _metrics_recorder.record_metrics(processed_metrics_data, record_on_all_hosts)

@@ -19,6 +19,7 @@ from __future__ import annotations
 import collections
 from collections.abc import Mapping, Sequence
 import copy
+import datetime
 import logging
 import queue
 import statistics
@@ -27,10 +28,10 @@ from typing import Any, Callable
 
 from google_cloud_mldiagnostics.clients import control_plane_client
 from google_cloud_mldiagnostics.core import global_manager
-from google_cloud_mldiagnostics.exporters import base_exporter
 from google_cloud_mldiagnostics.custom_types import exceptions
 from google_cloud_mldiagnostics.custom_types import metric_types
 from google_cloud_mldiagnostics.custom_types import mlrun_types
+from google_cloud_mldiagnostics.exporters import base_exporter
 from google_cloud_mldiagnostics.utils import host_utils
 
 logger = logging.getLogger(__name__)
@@ -46,6 +47,11 @@ _SYSTEM_METRICS = {
     metric_types.MetricType.HOST_CPU_UTILIZATION.value,
     metric_types.MetricType.HOST_MEMORY_UTILIZATION.value,
 }
+
+
+def _utc_now() -> datetime.datetime:
+  """Returns the current UTC time; the seam lets tests fake the clock."""
+  return datetime.datetime.now(datetime.timezone.utc)
 
 
 # TODO([INTERNAL]): Create a module to cache and average key metric values.
@@ -138,6 +144,7 @@ class _MetricsRecorder:
     value = metric_info.get("value")
     step = metric_info.get("step")
     labels = metric_info.get("labels")
+    timestamp = metric_info.get("timestamp")
 
     if not log_system_metrics and metric_name in _SYSTEM_METRICS:
       return None
@@ -151,7 +158,7 @@ class _MetricsRecorder:
     metric_value = None
     if not isinstance(value, (dict, str)):
       metric_value = self._extract_metric_value(metric_name, value)
-    
+
     # Update the metric tracker for numeric metrics on ALL hosts
     if metric_value is not None and metric_name in self._track_list:
       with self._lock:
@@ -165,13 +172,14 @@ class _MetricsRecorder:
       all_labels = labels.copy() if labels else {}
       unit = metric_types.METRIC_UNITS.get(metric_name, "1")
       all_labels.setdefault("unit", unit)
-      
+
       if metric_value is not None:
         return base_exporter.MetricPoint(
             name=metric_name,
             value=metric_value,
             step=step,
             labels=all_labels,
+            timestamp=timestamp,
         )
       elif isinstance(value, (dict, str)):
         # Route non-numeric but structured/text payloads as LogEntry
@@ -181,8 +189,9 @@ class _MetricsRecorder:
             body=value,
             step=step,
             labels=all_labels,
+            timestamp=timestamp,
         )
-    
+
     return None
 
   def _flush_metrics_worker(self) -> None:
@@ -222,7 +231,7 @@ class _MetricsRecorder:
           try:
             metrics_batch: list[base_exporter.MetricPoint] = []
             logs_batch: list[base_exporter.LogEntry] = []
-            
+
             for item in raw_items:
               if item is None:
                 should_stop = True
@@ -233,7 +242,7 @@ class _MetricsRecorder:
                   is_master_host,
                   log_system_metrics=ml_run.log_system_metrics,
               )
-              
+
               if isinstance(payload, base_exporter.MetricPoint):
                 metrics_batch.append(payload)
               elif isinstance(payload, base_exporter.LogEntry):
@@ -361,17 +370,27 @@ class _MetricsRecorder:
     """Record multiple metric values.
 
     Args:
-      metrics_data: A list of dictionaries, where each dictionary
-        represents a metric and contains 'metric_name' (str) and 'value'
-        (int, float, or list), and optionally 'step' (int) and 'labels'
-        (dict).
+      metrics_data: A list of dictionaries, where each dictionary represents a
+        metric and contains 'metric_name' (str) and 'value' (int, float, or
+        list), and optionally 'step' (int) and 'labels' (dict). The SDK stamps
+        each metric with its arrival time.
       record_on_all_hosts: Whether to record metrics on all hosts.
     """
+    # The event time is when the metric arrives here, not when the background
+    # worker flushes the batch, so that metrics drained together are not
+    # collapsed onto a single instant.
+    arrival_time = _utc_now()
     dropped_count = 0
     for metric_info in metrics_data:
       try:
+        # Shallow copy to avoid mutating the caller's dictionary. api/ copies
+        # too, but direct _MetricsRecorder users and core.record() never pass
+        # through it.
+        info = dict(metric_info)
+        info["timestamp"] = arrival_time
+
         self._queue.put_nowait({
-            "metric_info": metric_info,
+            "metric_info": info,
             "record_on_all_hosts": record_on_all_hosts,
         })
       except queue.Full:

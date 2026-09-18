@@ -119,7 +119,9 @@ class LoggingClient:
 
     Args:
         metrics: A list of dicts, where each dict contains 'metric_name',
-          'value', 'step', and 'labels'.
+          'value', 'step', and 'labels', and optionally 'timestamp'
+          (datetime.datetime). If 'timestamp' is absent or None, the write time
+          is used.
         run_id: ML run identifier
         location: ML run region
 
@@ -135,6 +137,7 @@ class LoggingClient:
           value = metric["value"]
           step = metric.get("step")
           labels = metric.get("labels")
+          timestamp = metric.get("timestamp") or current_time
 
           severity = metric.get("severity", "INFO")
           metric_resource = resource.Resource(
@@ -183,7 +186,7 @@ class LoggingClient:
           batch.log_struct(
               payload,
               severity=severity,
-              timestamp=current_time,
+              timestamp=timestamp,
               resource=metric_resource,
           )
       logger.info("Successfully written %d metrics in batch.", len(metrics))

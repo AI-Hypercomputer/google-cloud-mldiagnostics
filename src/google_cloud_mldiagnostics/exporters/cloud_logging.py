@@ -80,6 +80,7 @@ class CloudLoggingMetricsExporter(base_exporter.BaseMetricsExporter):
           "value": point.value,
           "step": point.step,
           "labels": point.labels,
+          "timestamp": point.timestamp,
       })
 
     logger.debug(
@@ -156,6 +157,7 @@ class CloudLoggingLogsExporter(base_exporter.BaseLogsExporter):
           "step": entry.step,
           "labels": entry.labels,
           "severity": entry.severity,
+          "timestamp": entry.timestamp,
       })
 
     logger.debug(

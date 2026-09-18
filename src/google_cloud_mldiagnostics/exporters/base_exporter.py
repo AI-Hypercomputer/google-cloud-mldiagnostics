@@ -32,7 +32,7 @@ class MetricPoint:
     value: The value of the metric.
     step: The step number associated with the metric.
     labels: Key-value pairs providing additional context.
-    timestamp: The timestamp of the metric point.
+    timestamp: The event time, captured by the SDK when the metric is recorded.
   """
 
   name: str
@@ -51,12 +51,14 @@ class LogEntry:
     severity: The severity level of the log (e.g., INFO, WARNING, ERROR).
     step: The step number associated with the log.
     labels: Key-value pairs providing additional context.
+    timestamp: The event time, captured by the SDK when the log is recorded.
   """
 
   body: str | Mapping[str, Any]
   severity: str = "INFO"
   step: int | None = None
   labels: Mapping[str, str] | None = None
+  timestamp: datetime.datetime | None = None
 
 
 class BaseMetricsExporter(abc.ABC):
