@@ -37,13 +37,45 @@ google-cloud-mldiagnostics is [available in PyPI](https://pypi.org/project/googl
 
 ## Releases
 
+### v1.0.9
+
+#### Changes
+
+- **Application Framework & RL Orchestrator Labels**:
+  - Added optional `application_framework` and `rl_orchestrator` parameters to `machinelearning_run` to attach workload metadata directly to your ML run.
+  - When specified, non-default values are automatically recorded as labels on the ML run for tracking and filtering.
+
+- **Parameters & Supported Values:**
+  - `application_framework`: Supported values are `NONE` (default), `MAXTEXT`, `AXLEARN`, and `MAXDIFFUSION`.
+  - `rl_orchestrator`: Supported values are `NONE` (default) and `TUNIX`.
+
+**Example Usage:**
+
+```bash
+from google_cloud_mldiagnostics import machinelearning_run
+from google_cloud_mldiagnostics.custom_types import mlrun_types
+
+
+run = machinelearning_run(
+    name="<run_name>",
+    run_group="<run_group>",
+    configs={ "epochs": 100, "batch_size": 32 },
+    project="<some_project>",
+    region="<some_zone>",
+    gcs_path="gs://<some_bucket>",
+    on_demand_xprof=True,
+    application_framework="MAXTEXT",
+    rl_orchestrator="TUNIX",
+)
+```
+
 ### v1.0.8
 
 #### Changes
 
 - **OpenTelemetry Integration**:
 
-  - Added support for configurable Otel exporters in machinelearning_run, allowing users to export SDK metrics and logs to OpenTelemetry Collector and Google Cloud Logging. see the [otel integration](https://pypi.org/project/google-cloud-mldiagnostics/#user-content-configure-telemetry-exporters-otel-integration) for details.
+  - Added support for configurable Otel exporters in machinelearning_run, allowing users to export SDK metrics and logs to OpenTelemetry Collector and Google Cloud Logging. see the [otel integration](https://pypi.org/project/google-cloud-mldiagnostics/#user-content-configure-telemetry-exporters-for-otel-integration) for details.
 
 - **vLLM Diagnostics Wrapper**:
 
