@@ -15,7 +15,6 @@
 """Client for sending requests to Diagon Control Plane."""
 
 import ast
-import copy
 import datetime
 import logging
 import pprint
@@ -94,7 +93,6 @@ class ControlPlaneClient:
     self.location = location
     self.base_url = base_url
     self.ml_runs_path = f"{base_url}/projects/{project_id}/locations/{location}/machineLearningRuns"
-    self.last_updated_run: Optional[Dict[str, Any]] = None
 
     # Initialize Google Cloud credentials
     self.credentials, _ = google.auth.default(scopes=[_CLOUD_PLATFORM_SCOPE])
@@ -112,32 +110,6 @@ class ControlPlaneClient:
         "Content-Type": "application/json",
         "Authorization": f"Bearer {self._get_access_token()}",
     }
-
-  def _is_matching_run(
-      self, run: Optional[Dict[str, Any]], target_name: str
-  ) -> bool:
-    """Checks whether the cached run matches the target run name."""
-    if not isinstance(run, dict):
-      return False
-    if not isinstance(target_name, str):
-      return False
-    run_name = run.get("name")
-    if not isinstance(run_name, str):
-      return False
-    run_name = run_name.strip()
-    target_name = target_name.strip()
-    if not run_name:
-      return False
-    if not target_name:
-      return False
-    if run_name == target_name:
-      return True
-    if "/" in target_name and "/" in run_name:
-      return False
-    return (
-        run_name.rstrip("/").split("/")[-1]
-        == target_name.rstrip("/").split("/")[-1]
-    )
 
   def get_operation(self, operation_name: str) -> Dict[str, Any]:
     """Get an existing operation using the Google Cloud API.
@@ -247,8 +219,7 @@ class ControlPlaneClient:
         artifacts: Artifacts configuration (e.g., gcsPath)
         run_group: Run group grouping identifier
         labels: Custom labels for the run
-        orchestrator: Orchestrator the workload is running on (e.g., CUSTOM,
-          GKE)
+        orchestrator: Orchestrator the workload is running on (e.g., CUSTOM, GKE)
         workload_details: Details about the workload
         workload_targets: Targets for the workload
 
@@ -381,7 +352,7 @@ class ControlPlaneClient:
       )
 
     if operation.get("response"):
-      result = operation["response"]
+      return operation["response"]
     else:
       # If no response field, fetch mlrun using target in metadata
       metadata = operation.get("metadata", {})
@@ -392,10 +363,7 @@ class ControlPlaneClient:
             f" {operation.get('name')}"
         )
       mlrun_name = target.split("/")[-1]
-      result = self.get_ml_run(mlrun_name)
-
-    self.last_updated_run = result
-    return result
+      return self.get_ml_run(mlrun_name)
 
   def create_profiler_session(
       self,
@@ -661,7 +629,6 @@ class ControlPlaneClient:
     json_response = response.json()
     if logger.isEnabledFor(logging.DEBUG):
       logger.debug("Get ML Run response: %s", pprint.pformat(json_response))
-    self.last_updated_run = json_response
     return json_response
 
   def update_ml_run(
@@ -704,7 +671,7 @@ class ControlPlaneClient:
     """
     for attempt in range(_MAX_RETRIES):
       try:
-        result = self._attempt_update_ml_run(
+        return self._attempt_update_ml_run(
             name,
             force,
             run_phase,
@@ -716,10 +683,7 @@ class ControlPlaneClient:
             workload_targets=workload_targets,
             update_mask=update_mask,
         )
-        self.last_updated_run = result
-        return result
       except requests.exceptions.HTTPError as e:
-        self.last_updated_run = None
         logger.warning(
             "Update for ML run '%s' (phase: %s) failed. "
             "(Attempt %s/%s). Error: %s",
@@ -752,15 +716,7 @@ class ControlPlaneClient:
       update_mask: str = "*",
   ) -> Dict[str, Any]:
     """Attempt to update an existing ML run once."""
-    if (
-        self.last_updated_run
-        and self.last_updated_run.get("etag")
-        and self._is_matching_run(self.last_updated_run, name)
-    ):
-      payload = copy.deepcopy(self.last_updated_run)
-    else:
-      payload = self.get_ml_run(name)
-
+    payload = self.get_ml_run(name)
     need_update = force
 
     if display_name is not None and payload.get("displayName") != display_name:

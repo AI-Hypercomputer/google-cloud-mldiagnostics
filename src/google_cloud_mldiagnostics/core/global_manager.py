@@ -17,7 +17,7 @@
 import logging
 import threading
 import time
-from typing import Any, Dict, Optional
+from typing import Optional
 
 import requests
 
@@ -98,8 +98,7 @@ class GlobalRunManager:
     """Initialize or update the singleton with new run information.
 
     Args:
-        mlrun: The ML run to initialize. It may be mutated (e.g., its name
-          updated to the canonical run ID) based on the control plane response.
+        mlrun: The ML run to initialize.
     """
     with self._lock:
       if self._initialized:
@@ -278,25 +277,6 @@ class GlobalRunManager:
       self._create_ml_run_on_control_plane(mlrun)
       self._initialized = True
 
-  def _update_ml_run_from_response(
-      self, response: Optional[Dict[str, Any]]
-  ) -> None:
-    """Updates active ML run state from an API response.
-
-    Mutates ``self._ml_run.name`` in-place to the canonical run ID returned
-    by the control plane.
-
-    Args:
-        response: The response dictionary from the control plane API.
-    """
-    if isinstance(response, dict):
-      if self._ml_run is not None:
-        resp_name = response.get("name")
-        if isinstance(resp_name, str) and resp_name.strip():
-          resp_id = resp_name.strip("/").split("/")[-1]
-          if resp_id:
-            self._ml_run.name = resp_id
-
   def _create_ml_run_on_control_plane(self, mlrun: mlrun_types.MLRun) -> None:
     """Helper to call create_ml_run on control plane client."""
     artifacts = None
@@ -360,7 +340,8 @@ class GlobalRunManager:
           "Successfully created ML run: %s",
           response.get("name") if response else "unknown",
       )
-      self._update_ml_run_from_response(response)
+      if response and "name" in response:
+        self._ml_run.name = response.get("name", "unknown").split("/")[-1]  # pyrefly: ignore[missing-attribute]
 
     except requests.exceptions.HTTPError as e_create:
       if e_create.response is not None and e_create.response.status_code == 409:
@@ -368,8 +349,7 @@ class GlobalRunManager:
             "ML run %r already exists. Updating existing run details.",
             mlrun.name,
         )
-        # pyrefly: ignore[missing-attribute]
-        response = self._control_plane_client.update_ml_run(
+        self._control_plane_client.update_ml_run(  # pyrefly: ignore[missing-attribute]
             name=mlrun.name,
             display_name=mlrun.display_name,
             tools=tools,
@@ -379,7 +359,6 @@ class GlobalRunManager:
             configs=mlrun.configs,
             workload_targets=mlrun.workload_targets,
         )
-        self._update_ml_run_from_response(response)
       else:
         logger.error("Failed to create ML run: %s", e_create)
         raise
@@ -484,11 +463,7 @@ class GlobalRunManager:
           # workload_details and fetch again as the backend might populate it.
           for i in range(self._MAX_GET_ML_RUN_ATTEMPTS):
             resp = client.get_ml_run(self._ml_run.name)
-            workload_details = (
-                resp.get("workloadDetails", {})
-                if isinstance(resp, dict)
-                else {}
-            )
+            workload_details = resp.get("workloadDetails", {})
             self._ml_run.workload_details = workload_details
 
             if len(workload_details.get("targets", [])) > 0:
@@ -671,14 +646,6 @@ class GlobalRunManager:
         return self._control_plane_client
       return None
 
-  @property
-  def last_updated_run(self) -> Optional[Dict[str, Any]]:
-    """Get the raw dictionary of the last updated run from the control plane."""
-    with self._lock:
-      if self._control_plane_client is not None:
-        return self._control_plane_client.last_updated_run
-      return None
-
   def clear(self) -> None:
     """Clear the current run state."""
     with self._lock:
@@ -716,8 +683,7 @@ def initialize_with_mlrun(mlrun: mlrun_types.MLRun) -> GlobalRunManager:
   """Initialize the global manager with an MLRun instance.
 
   Args:
-      mlrun: The MLRun instance to register. It may be mutated (e.g., its name
-        updated to the canonical run ID) based on the control plane response.
+      mlrun: The MLRun instance to register.
 
   Returns:
       The initialized GlobalRunManager instance.
@@ -731,8 +697,7 @@ def register_run(mlrun: mlrun_types.MLRun) -> None:
   """Register an MLRun instance with the global manager.
 
   Args:
-      mlrun: The MLRun instance to register. It may be mutated (e.g., its name
-        updated to the canonical run ID) based on the control plane response.
+      mlrun: The MLRun instance to register.
   """
   manager = get_global_run_manager()
   manager.initialize(mlrun)
@@ -766,14 +731,3 @@ def get_logging_client() -> Optional[logging_client.LoggingClient]:
   """
   manager = get_global_run_manager()
   return manager.logging_client
-
-
-def get_last_updated_run() -> Optional[Dict[str, Any]]:
-  """Get the last updated run dict from the global manager.
-
-  Returns:
-      The last updated run dictionary or None if not initialized.
-  """
-  manager = get_global_run_manager()
-  return manager.last_updated_run
-
