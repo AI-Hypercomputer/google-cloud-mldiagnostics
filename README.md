@@ -1029,6 +1029,9 @@ The `run_vllm` wrapper:
 - `--configs` (Optional): User-defined configurations passed as a JSON object string (e.g., `'{"user":"my-team", "running_on":"TPU"}'`).
 - `--framework` (Optional): Underlying ML framework for the workload (`pytorch` or `jax`, default: `pytorch`).
 - `--jax_profiler_port` (Optional): JAX profiler server port (default: `9999`).
+- `--phased_profiling_dir` (Optional): Base GCS directory for JAX phased profiling traces. The wrapper appends `<run_name>/plugins/profile/` and exports the result as `PHASED_PROFILING_DIR` to the vLLM process. This is the recommended way to enable phased profiling.
+
+> **Note (multi-host setups):** If `PHASED_PROFILING_DIR` is detected in the OS environment and `--phased_profiling_dir` is not passed, the wrapper still forwards it to `vllm serve` (with the run-scoped suffix) and logs a warning. In multi-host setups (e.g. Ray backend on GKE LeaderWorkerSet), phased profiles may not show in the XProf UI in this case: vLLM's Ray executor applies driver environment variables on remote workers with `os.environ.setdefault()`, so the run-scoped path does not propagate to workers that already have `PHASED_PROFILING_DIR` in their environment, and their traces end up outside the MLRun directory. Use `--phased_profiling_dir` and do not set `PHASED_PROFILING_DIR` in the environment.
 
 ### 1. Prepare Docker Image for vLLM
 

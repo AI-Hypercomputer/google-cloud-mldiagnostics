@@ -81,6 +81,20 @@ parser.add_argument(
     help="Underlying ML framework for the workload (default: pytorch).",
     type=str,
 )
+parser.add_argument(
+    "--phased_profiling_dir",
+    default=None,
+    help=(
+        "Base GCS destination directory for JAX phased profiling traces. The"
+        " MLRun-specific suffix '<run_name>/plugins/profile/' is appended"
+        " automatically and exported as PHASED_PROFILING_DIR to vllm. Use"
+        " this flag instead of setting PHASED_PROFILING_DIR in the"
+        " environment; an environment value is still forwarded, but in"
+        " multi-host (Ray) setups it does not propagate the run-scoped path"
+        " to remote workers and phased profiles may not show in the XProf UI."
+    ),
+    type=str,
+)
 
 
 
@@ -205,7 +219,35 @@ def main(args: List[str] | None):
   vllm_env["JAX_PROFILER_SERVER_PORT"] = str(diagon_args.jax_profiler_port)
 
   # 3. Construct deterministic paths under the dynamic MLRun ID
-  base_phased_profiling_dir = os.environ.get("PHASED_PROFILING_DIR")
+  # --phased_profiling_dir is the supported way to enable phased profiling.
+  # A PHASED_PROFILING_DIR found in the OS environment is still forwarded to
+  # vllm serve for backward compatibility, but in multi-host (Ray) setups the
+  # run-scoped value will not propagate to remote workers: Ray applies driver
+  # env vars on workers with os.environ.setdefault(), so a pre-existing value in
+  # the worker node environment shadows the path computed here.
+  env_phased_profiling_dir = os.environ.get("PHASED_PROFILING_DIR")
+  base_phased_profiling_dir = diagon_args.phased_profiling_dir
+  if base_phased_profiling_dir:
+    if env_phased_profiling_dir:
+      logger.warning(
+          "PHASED_PROFILING_DIR is set in the OS environment (%s) and"
+          " --phased_profiling_dir was also passed; using the flag value. For"
+          " multi-host setups, remove PHASED_PROFILING_DIR from the worker"
+          " node environment, otherwise workers will ignore the run-scoped"
+          " path and their phased profiles may not show in the XProf UI.",
+          env_phased_profiling_dir,
+      )
+  elif env_phased_profiling_dir:
+    logger.warning(
+        "PHASED_PROFILING_DIR detected in the OS environment (%s); forwarding"
+        " it to vllm serve. For multi-host setups, phased profiles may not"
+        " show in the XProf UI because the run-scoped path will not"
+        " propagate to remote Ray workers. Pass --phased_profiling_dir"
+        " instead and do not set PHASED_PROFILING_DIR in the environment.",
+        env_phased_profiling_dir,
+    )
+    base_phased_profiling_dir = env_phased_profiling_dir
+
   if base_phased_profiling_dir:
     phased_prof_dir = (
         f"{base_phased_profiling_dir.rstrip('/')}/{run.name}/plugins/profile/"
