@@ -526,7 +526,6 @@ class MetricsRecorderThread:
     while not self._stop_event.is_set():
       try:
         self._collect_and_record()
-        self._update_control_plane_time()
       except Exception:  # pylint: disable=broad-exception-caught
         logger.exception("Failed to collect or record metrics")
       finally:
