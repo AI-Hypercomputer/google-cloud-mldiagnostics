@@ -47,7 +47,7 @@ def _initialize():
         old_flags | os.RTLD_LOCAL | getattr(os, "RTLD_DEEPBIND", 0)
     )
     # pylint: disable=g-import-not-at-top
-    from libtpu import sdk as libtpu_sdk_imported  # pytype: disable=import-error
+    from libtpu import sdk as libtpu_sdk_imported  # pyrefly: ignore[missing-import]
 
     libtpu_sdk = libtpu_sdk_imported
     if hasattr(libtpu_sdk, "tpumonitoring"):

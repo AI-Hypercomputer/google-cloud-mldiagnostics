@@ -43,7 +43,7 @@ def _initialize() -> None:
     _initialized = True
     try:
       # pylint: disable=g-import-not-at-top
-      import pynvml as pynvml_imported  # pytype: disable=import-error
+      import pynvml as pynvml_imported
 
       pynvml = pynvml_imported
       pynvml.nvmlInit()

@@ -113,12 +113,10 @@ def _import_xprof():
   Returns:
     The `_pywrap_profiler_plugin` module from `xprof.convert`.
   """
-  # pytype: disable=import-error
   try:
-    from xprof.convert import _pywrap_profiler_plugin
+    from xprof.convert import _pywrap_profiler_plugin  # pyrefly: ignore[missing-import]
   except ImportError as exc:
     raise ImportError("This script requires `xprof` to be installed.") from exc
-  # pytype: enable=import-error
   return _pywrap_profiler_plugin
 
 
@@ -279,7 +277,7 @@ def _collect_profile_xprof(
     print("Session name not provided, xprof will use auto generated")
 
   if use_system_hostname:
-    options["use_system_hostname"] = True  # pyrefly: ignore[bad-assignment]
+    options["use_system_hostname"] = True
   elif override_hostnames:
     options["override_hostnames"] = _validate_hostnames(  # pyrefly: ignore[bad-assignment]
         hosts, override_hostnames

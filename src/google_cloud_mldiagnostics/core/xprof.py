@@ -76,7 +76,7 @@ class JaxProfilerEngine(BaseProfilerEngine):
     try:
       options = jax.profiler.ProfileOptions()
       options.session_id = session_id
-      jax.profiler.start_trace(gcs_dir, profiler_options=options)  # pyrefly: ignore[bad-argument-type]
+      jax.profiler.start_trace(gcs_dir, profiler_options=options)
       return None
     except exceptions.ProfilingError as e:
       logger.error("Error starting JAX profiler: %s", e)
@@ -98,7 +98,7 @@ class JaxProfilerEngine(BaseProfilerEngine):
 
     options = jax.profiler.ProfileOptions()
     options.session_id = session_id
-    return jax.profiler.trace(gcs_dir, profiler_options=options)  # pyrefly: ignore[bad-argument-type]
+    return jax.profiler.trace(gcs_dir, profiler_options=options)
 
   def start_server(self, port: int) -> None:
     logger.info("Defaulting to JAX framework for on-demand profiling.")
@@ -117,7 +117,7 @@ class PyTorchProfilerEngine(BaseProfilerEngine):
 
   def start_trace(self, gcs_dir: str, session_id: str) -> typing.Any:
     import torch  # pylint: disable=g-import-not-at-top
-    from torch_tpu._internal.profiler import TpuProfilerConfig  # pylint: disable=g-import-not-at-top # pytype: disable=import-error
+    from torch_tpu._internal.profiler import TpuProfilerConfig  # pylint: disable=g-import-not-at-top  # pyrefly: ignore[missing-import]
 
     config = TpuProfilerConfig(
         host_tracer_level=2,
@@ -144,7 +144,7 @@ class PyTorchProfilerEngine(BaseProfilerEngine):
       self, gcs_dir: str, session_id: str
   ) -> typing.ContextManager[typing.Any]:
     import torch  # pylint: disable=g-import-not-at-top
-    from torch_tpu._internal.profiler import TpuProfilerConfig  # pylint: disable=g-import-not-at-top # pytype: disable=import-error
+    from torch_tpu._internal.profiler import TpuProfilerConfig  # pylint: disable=g-import-not-at-top  # pyrefly: ignore[missing-import]
 
     config = TpuProfilerConfig(
         host_tracer_level=2,

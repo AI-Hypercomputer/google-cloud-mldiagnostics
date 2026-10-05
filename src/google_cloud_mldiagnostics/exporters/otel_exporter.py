@@ -42,10 +42,10 @@ class OTelMetricsExporter(base_exporter.BaseMetricsExporter):
       return cls._is_available
       
     try:
-      from opentelemetry import metrics  # pytype: disable=import-error
-      from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter  # pytype: disable=import-error
-      from opentelemetry.sdk.metrics import MeterProvider  # pytype: disable=import-error
-      from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader  # pytype: disable=import-error
+      from opentelemetry import metrics  # pyrefly: ignore[missing-import]
+      from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter  # pyrefly: ignore[missing-import]
+      from opentelemetry.sdk.metrics import MeterProvider  # pyrefly: ignore[missing-import]
+      from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader  # pyrefly: ignore[missing-import]
 
       cls._is_available = True
     except ImportError:
@@ -68,15 +68,15 @@ class OTelMetricsExporter(base_exporter.BaseMetricsExporter):
     """Lazily retrieves and caches the OTel Meter."""
     if self._meter is None:
       try:
-        from opentelemetry import metrics  # pytype: disable=import-error
+        from opentelemetry import metrics  # pyrefly: ignore[missing-import]
 
         # Auto-initialize provider if none is set (Global No-Op)
         # This allows zero-config usage when DIAGON_ENABLE_OTEL is true
         try:
-          from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter  # pytype: disable=import-error
-          from opentelemetry.sdk.metrics import MeterProvider  # pytype: disable=import-error
-          from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader  # pytype: disable=import-error
-          from opentelemetry.sdk.resources import Resource  # pytype: disable=import-error
+          from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter  # pyrefly: ignore[missing-import]
+          from opentelemetry.sdk.metrics import MeterProvider  # pyrefly: ignore[missing-import]
+          from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader  # pyrefly: ignore[missing-import]
+          from opentelemetry.sdk.resources import Resource  # pyrefly: ignore[missing-import]
 
           # Check if global provider is No-Op
           current_provider = metrics.get_meter_provider()
@@ -245,14 +245,14 @@ class OTelLogsExporter(base_exporter.BaseLogsExporter):
       return cls._is_available
       
     try:
-      from opentelemetry import _logs  # pytype: disable=import-error
-      from opentelemetry.sdk._logs import LoggerProvider  # pytype: disable=import-error
-      from opentelemetry.sdk._logs.export import BatchLogRecordProcessor  # pytype: disable=import-error
+      from opentelemetry import _logs  # pyrefly: ignore[missing-import]
+      from opentelemetry.sdk._logs import LoggerProvider  # pyrefly: ignore[missing-import]
+      from opentelemetry.sdk._logs.export import BatchLogRecordProcessor  # pyrefly: ignore[missing-import]
 
       try:
-        from opentelemetry.exporter.otlp.proto.grpc.log_exporter import OTLPLogExporter  # pytype: disable=import-error
+        from opentelemetry.exporter.otlp.proto.grpc.log_exporter import OTLPLogExporter  # pyrefly: ignore[missing-import]
       except ImportError:
-        from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter  # pytype: disable=import-error
+        from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter  # pyrefly: ignore[missing-import]
       cls._is_available = True
     except ImportError:
       cls._is_available = False
@@ -271,14 +271,14 @@ class OTelLogsExporter(base_exporter.BaseLogsExporter):
     """Lazily retrieves and caches the OTel Logger."""
     if self._logger is None:
       try:
-        from opentelemetry import _logs  # pytype: disable=import-error
+        from opentelemetry import _logs  # pyrefly: ignore[missing-import]
 
         current_provider = _logs.get_logger_provider()
         if "Proxy" in type(current_provider).__name__:
           try:
-            from opentelemetry.sdk._logs import LoggerProvider  # pytype: disable=import-error
-            from opentelemetry.sdk._logs.export import BatchLogRecordProcessor  # pytype: disable=import-error
-            from opentelemetry.sdk.resources import Resource  # pytype: disable=import-error
+            from opentelemetry.sdk._logs import LoggerProvider  # pyrefly: ignore[missing-import]
+            from opentelemetry.sdk._logs.export import BatchLogRecordProcessor  # pyrefly: ignore[missing-import]
+            from opentelemetry.sdk.resources import Resource  # pyrefly: ignore[missing-import]
 
             # Build custom resource with run_id
             resource_attrs = {
@@ -305,9 +305,9 @@ class OTelLogsExporter(base_exporter.BaseLogsExporter):
             custom_resource = Resource(attributes=resource_attrs)
 
             try:
-              from opentelemetry.exporter.otlp.proto.grpc.log_exporter import OTLPLogExporter  # pytype: disable=import-error
+              from opentelemetry.exporter.otlp.proto.grpc.log_exporter import OTLPLogExporter  # pyrefly: ignore[missing-import]
             except ImportError:
-              from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter  # pytype: disable=import-error
+              from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter  # pyrefly: ignore[missing-import]
 
             # OTLPLogExporter automatically picks up OTEL_EXPORTER_OTLP_ENDPOINT env var
             exporter = OTLPLogExporter()
@@ -346,7 +346,7 @@ class OTelLogsExporter(base_exporter.BaseLogsExporter):
   def _get_severity_info(cls):
     if cls._severity_map is None:
       try:
-        from opentelemetry._logs import SeverityNumber  # pytype: disable=import-error
+        from opentelemetry._logs import SeverityNumber  # pyrefly: ignore[missing-import]
 
         cls._severity_number = SeverityNumber
         cls._severity_map = {
@@ -418,7 +418,7 @@ class OTelLogsExporter(base_exporter.BaseLogsExporter):
   def force_flush(self) -> None:
     """Flushes buffered logs in OTel LoggerProvider."""
     try:
-      from opentelemetry import _logs  # pytype: disable=import-error
+      from opentelemetry import _logs  # pyrefly: ignore[missing-import]
 
       provider = _logs.get_logger_provider()
 
