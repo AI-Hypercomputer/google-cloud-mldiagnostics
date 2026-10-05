@@ -81,7 +81,7 @@ class TorchHardwareConfig:
 
       # 2. Single-Host Non-Distributed mode: fallback to local device_count()
       try:
-        return torch.tpu.device_count()
+        return torch.accelerator.device_count()
       except Exception:  # pylint: disable=broad-exception-caught
         return 0
     return 1

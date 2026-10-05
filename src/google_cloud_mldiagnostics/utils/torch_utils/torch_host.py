@@ -32,7 +32,11 @@ def get_torch_process_index() -> int | None:
 
 def get_accelerator_type() -> metric_types.AcceleratorType:
   """Returns the accelerator type by inspecting PyTorch devices."""
-  if hasattr(torch, "tpu") and torch.tpu.is_available():
+  if (
+      hasattr(torch, "tpu")
+      and torch.accelerator.is_available()
+      and torch.accelerator.current_accelerator().type == "tpu"
+  ):
     return metric_types.AcceleratorType.TPU
 
   return metric_types.AcceleratorType.CPU
