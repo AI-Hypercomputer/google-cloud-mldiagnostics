@@ -150,5 +150,12 @@ class MLRun:
   application_framework: ApplicationFramework = ApplicationFramework.NONE
   rl_orchestrator: RlOrchestrator = RlOrchestrator.NONE
 
+  # Self-hosted fields.
+  control_plane_url: str | None = None
+  ml_run_id: str | None = None
+  cluster_id: str | None = None
+  workload_id: str | None = None
+  namespace: str | None = None
+
   def __post_init__(self) -> None:
     gcp.validate_region(self.location)
