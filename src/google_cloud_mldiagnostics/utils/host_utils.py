@@ -526,6 +526,22 @@ def is_master_host(
   return process_index == 0
 
 
+def get_local_process_index(
+    framework: mlrun_types.Framework = mlrun_types.Framework.JAX,
+) -> int:
+  """Host-local process index; 0 for exactly one process per host."""
+  if framework == mlrun_types.Framework.PYTORCH:
+    return _import_torch_host_module().get_torch_local_process_index()
+  return 0
+
+
+def is_local_master_process(
+    framework: mlrun_types.Framework = mlrun_types.Framework.JAX,
+) -> bool:
+  """Checks if the current process is the local master (local rank 0) on this host."""
+  return get_local_process_index(framework) == 0
+
+
 def get_workload_details(
     orchestrator: str = "GKE", run_workload_id: str | None = None
 ) -> dict[str, Any] | None:

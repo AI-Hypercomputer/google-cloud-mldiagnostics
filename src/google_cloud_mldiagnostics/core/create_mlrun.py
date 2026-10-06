@@ -240,7 +240,11 @@ def initialize_mlrun(
   run_phase_monitor.start()
 
   global _METRICS_RECORDER_THREAD_STARTED
-  if metrics_record_interval_sec > 0 and not _METRICS_RECORDER_THREAD_STARTED:
+  if (
+      metrics_record_interval_sec > 0
+      and not _METRICS_RECORDER_THREAD_STARTED
+      and host_utils.is_local_master_process(ml_run.framework)
+  ):
     framework = ml_run.framework
     with _METRICS_RECORDER_THREAD_LOCK:
       if not _METRICS_RECORDER_THREAD_STARTED:

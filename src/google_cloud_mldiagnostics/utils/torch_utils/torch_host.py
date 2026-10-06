@@ -15,6 +15,7 @@
 """Utility functions for PyTorch host-related checks."""
 
 import logging
+import os
 from google_cloud_mldiagnostics.custom_types import metric_types
 import torch
 
@@ -28,6 +29,22 @@ def get_torch_process_index() -> int | None:
     return torch.distributed.get_rank()
 
   return None
+
+
+def get_torch_local_process_index() -> int:
+  """Returns the host-local process index for PyTorch (defaults to 0)."""
+  val = os.environ.get("LOCAL_RANK")
+  if val is not None:
+    try:
+      return int(val)
+    except ValueError:
+      _logger.warning("Invalid integer value for LOCAL_RANK: %r", val)
+  return 0
+
+
+def is_torch_local_master_process() -> bool:
+  """Checks if the current process is the local master (local rank 0) on this host."""
+  return get_torch_local_process_index() == 0
 
 
 def get_accelerator_type() -> metric_types.AcceleratorType:

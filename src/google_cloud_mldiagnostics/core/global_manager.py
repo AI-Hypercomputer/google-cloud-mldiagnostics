@@ -223,7 +223,7 @@ class GlobalRunManager:
           and not host_utils.is_master_host(
               mlrun.framework, mlrun.serving_engine
           )
-      ):
+      ) or not host_utils.is_local_master_process(mlrun.framework):
         logger.info(
             "Skipping ML run initialization on control plane (run_group=%s,"
             " name=%s): Current host is not the master host.",

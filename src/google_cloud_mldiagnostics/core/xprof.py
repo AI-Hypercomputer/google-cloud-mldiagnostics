@@ -55,6 +55,22 @@ class BaseProfilerEngine(abc.ABC):
     """Returns framework context manager instance for trace profiling."""
     pass
 
+  @abc.abstractmethod
+  def exit_trace_context(
+      self,
+      trace_context_manager: typing.ContextManager[typing.Any],
+      exc_type: typing.Any,
+      exc_val: typing.Any,
+      exc_tb: typing.Any,
+  ) -> None:
+    """Exits the trace context manager and performs any engine-specific cleanup."""
+    pass
+
+  @abc.abstractmethod
+  def should_report_session(self) -> bool:
+    """Returns whether profiler sessions should be reported to the control plane."""
+    pass
+
   # --- On-Demand Profiling Server Methods ---
   @abc.abstractmethod
   def start_server(self, port: int) -> None:
@@ -100,6 +116,18 @@ class JaxProfilerEngine(BaseProfilerEngine):
     options.session_id = session_id
     return jax.profiler.trace(gcs_dir, profiler_options=options)
 
+  def exit_trace_context(
+      self,
+      trace_context_manager: typing.ContextManager[typing.Any],
+      exc_type: typing.Any,
+      exc_val: typing.Any,
+      exc_tb: typing.Any,
+  ) -> None:
+    trace_context_manager.__exit__(exc_type, exc_val, exc_tb)
+
+  def should_report_session(self) -> bool:
+    return True
+
   def start_server(self, port: int) -> None:
     logger.info("Defaulting to JAX framework for on-demand profiling.")
     import jax  # pylint: disable=g-import-not-at-top
@@ -115,14 +143,29 @@ class JaxProfilerEngine(BaseProfilerEngine):
 class PyTorchProfilerEngine(BaseProfilerEngine):
   """Profiler engine implementation for PyTorch framework."""
 
+  def should_report_session(self) -> bool:
+    return False
+
+  def _synchronize_distributed_barrier(self) -> None:
+    """Synchronizes all distributed PyTorch ranks via barrier if initialized."""
+    import torch  # pylint: disable=g-import-not-at-top
+
+    if torch.distributed.is_initialized():
+      logger.info("Synchronizing PyTorch distributed ranks via barrier.")
+      torch.distributed.barrier()
+
   def start_trace(self, gcs_dir: str, session_id: str) -> typing.Any:
     import torch  # pylint: disable=g-import-not-at-top
     from torch_tpu._internal.profiler import TpuProfilerConfig  # pylint: disable=g-import-not-at-top  # pyrefly: ignore[missing-import]
 
+    worker_rank = str(
+        host_utils.get_process_index(mlrun_types.Framework.PYTORCH)
+    )
     config = TpuProfilerConfig(
         host_tracer_level=2,
         device_tracer_level=1,
         run_dir=gcs_dir,
+        worker_rank=worker_rank,
     )
     prof = torch.profiler.profile(
         activities=[
@@ -131,11 +174,13 @@ class PyTorchProfilerEngine(BaseProfilerEngine):
         ],
         experimental_config=config,
     )
+    self._synchronize_distributed_barrier()
     prof.start()
     return prof
 
   def stop_trace(self, handle: typing.Any, gcs_dir: str = "") -> None:
     if handle is not None:
+      self._synchronize_distributed_barrier()
       handle.stop()
     else:
       logger.warning("No active PyTorch profiler instance found to stop.")
@@ -146,11 +191,16 @@ class PyTorchProfilerEngine(BaseProfilerEngine):
     import torch  # pylint: disable=g-import-not-at-top
     from torch_tpu._internal.profiler import TpuProfilerConfig  # pylint: disable=g-import-not-at-top  # pyrefly: ignore[missing-import]
 
+    worker_rank = str(
+        host_utils.get_process_index(mlrun_types.Framework.PYTORCH)
+    )
     config = TpuProfilerConfig(
         host_tracer_level=2,
         device_tracer_level=1,
         run_dir=gcs_dir,
+        worker_rank=worker_rank,
     )
+    self._synchronize_distributed_barrier()
     return torch.profiler.profile(
         activities=[
             torch.profiler.ProfilerActivity.CPU,
@@ -158,6 +208,17 @@ class PyTorchProfilerEngine(BaseProfilerEngine):
         ],
         experimental_config=config,
     )
+
+  def exit_trace_context(
+      self,
+      trace_context_manager: typing.ContextManager[typing.Any],
+      exc_type: typing.Any,
+      exc_val: typing.Any,
+      exc_tb: typing.Any,
+  ) -> None:
+    if exc_type is None:
+      self._synchronize_distributed_barrier()
+    trace_context_manager.__exit__(exc_type, exc_val, exc_tb)
 
   def start_server(self, port: int) -> None:
     logger.info("Detected PyTorch framework for on-demand profiling.")
@@ -287,7 +348,20 @@ class Xprof:
   def _report_profiler_session(
       self, create_new_session: bool, context_msg: str
   ) -> None:
-    """Reports the profiler session to the Control Plane."""
+    framework = (
+        self._resolved_run.framework
+        if self._resolved_run
+        else mlrun_types.Framework.JAX
+    )
+    if (
+        self._process_index_list is None
+        and not host_utils.is_local_master_process(framework)
+    ):
+      logger.info(
+          "Skipping programmatic profiler session report on non-local-master"
+          " process."
+      )
+      return
     if self._start_time is None or self._session_phase is None:
       logger.error(
           "Profiler session not set start time or session phase,"
@@ -373,14 +447,16 @@ class Xprof:
       self._update_session_state(
           session_phase="FAILED",
       )
+      if self._engine.should_report_session():
+        self._report_profiler_session(
+            create_new_session=True, context_msg="on_start"
+        )
+      return
+
+    if self._engine.should_report_session():
       self._report_profiler_session(
           create_new_session=True, context_msg="on_start"
       )
-      return
-
-    self._report_profiler_session(
-        create_new_session=True, context_msg="on_start"
-    )
 
   def stop(self):
     """Stops the profiler."""
@@ -406,9 +482,11 @@ class Xprof:
           session_phase="FAILED",
       )
 
-    self._report_profiler_session(
-        create_new_session=False, context_msg="on_stop"
-    )
+    if self._engine.should_report_session():
+      self._report_profiler_session(
+          create_new_session=False,
+          context_msg="on_stop",
+      )
 
   def __enter__(self):
     """Context manager entry point."""
@@ -438,22 +516,32 @@ class Xprof:
       self._update_session_state(
           session_phase="FAILED",
       )
+      if self._engine.should_report_session():
+        self._report_profiler_session(
+            create_new_session=True, context_msg="on_context_enter"
+        )
+      return self
+
+    if self._engine.should_report_session():
       self._report_profiler_session(
           create_new_session=True, context_msg="on_context_enter"
       )
-      return self
-
-    self._report_profiler_session(
-        create_new_session=True, context_msg="on_context_enter"
-    )
 
     return self
 
   def __exit__(self, exc_type, exc_val, exc_tb):
     """Context manager exit point."""
     if self._is_profiling:
-      if self._trace_context_manager is not None:
-        self._trace_context_manager.__exit__(exc_type, exc_val, exc_tb)
+      if (
+          self._trace_context_manager is not None
+          and self._engine is not None
+      ):
+        self._engine.exit_trace_context(
+            self._trace_context_manager,
+            exc_type,
+            exc_val,
+            exc_tb,
+        )
 
       phase = "SUCCEEDED" if exc_type is None else "FAILED"
       self._update_session_state(
@@ -465,9 +553,14 @@ class Xprof:
           self._gcs_profile_dir,
       )
 
-      self._report_profiler_session(
-          create_new_session=False, context_msg="on_context_exit"
-      )
+      if (
+          self._engine is not None
+          and self._engine.should_report_session()
+      ):
+        self._report_profiler_session(
+            create_new_session=False,
+            context_msg="on_context_exit",
+        )
 
   def __call__(self, func):
     """Decorator for profiling a function."""
