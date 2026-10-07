@@ -15,6 +15,7 @@
 """Client for sending requests to Diagon Control Plane."""
 
 import ast
+import copy
 import datetime
 import logging
 import pprint
@@ -28,7 +29,6 @@ from google_cloud_mldiagnostics.custom_types import mlrun_types
 from google_cloud_mldiagnostics.utils import gcp
 from google_cloud_mldiagnostics.utils import host_utils
 import requests
-
 
 logger = logging.getLogger(__name__)
 _MAX_RETRIES = 3
@@ -93,9 +93,39 @@ class ControlPlaneClient:
     self.location = location
     self.base_url = base_url
     self.ml_runs_path = f"{base_url}/projects/{project_id}/locations/{location}/machineLearningRuns"
+    self.last_updated_run: Optional[Dict[str, Any]] = None
 
     # Initialize Google Cloud credentials
     self.credentials, _ = google.auth.default(scopes=[_CLOUD_PLATFORM_SCOPE])
+
+  def _sanitize_ml_run_dict(self, run: Any) -> Any:
+    """Sanitizes an ML run dictionary by stripping protobuf Any metadata."""
+    if not isinstance(run, dict):
+      return run
+    sanitized = run.copy()
+    sanitized.pop("@type", None)
+    return sanitized
+
+  def _is_matching_run(
+      self, run: Optional[Dict[str, Any]], target_name: str
+  ) -> bool:
+    """Checks whether the cached run matches the target run name."""
+    if not isinstance(run, dict):
+      return False
+    if not isinstance(target_name, str):
+      return False
+    run_name = run.get("name")
+    if not isinstance(run_name, str):
+      return False
+    run_name = run_name.strip().rstrip("/")
+    target_name = target_name.strip().rstrip("/")
+    if not run_name or not target_name:
+      return False
+    if run_name == target_name:
+      return True
+    if "/" in target_name and "/" in run_name:
+      return False
+    return run_name.split("/")[-1] == target_name.split("/")[-1]
 
   def _get_access_token(self) -> str:
     """Get Google Cloud access token for authentication."""
@@ -219,7 +249,8 @@ class ControlPlaneClient:
         artifacts: Artifacts configuration (e.g., gcsPath)
         run_group: Run group grouping identifier
         labels: Custom labels for the run
-        orchestrator: Orchestrator the workload is running on (e.g., CUSTOM, GKE)
+        orchestrator: Orchestrator the workload is running on (e.g., CUSTOM,
+          GKE)
         workload_details: Details about the workload
         workload_targets: Targets for the workload
 
@@ -352,7 +383,7 @@ class ControlPlaneClient:
       )
 
     if operation.get("response"):
-      return operation["response"]
+      result = operation["response"]
     else:
       # If no response field, fetch mlrun using target in metadata
       metadata = operation.get("metadata", {})
@@ -363,7 +394,10 @@ class ControlPlaneClient:
             f" {operation.get('name')}"
         )
       mlrun_name = target.split("/")[-1]
-      return self.get_ml_run(mlrun_name)
+      result = self.get_ml_run(mlrun_name)
+    sanitized_result = self._sanitize_ml_run_dict(result)
+    self.last_updated_run = sanitized_result
+    return sanitized_result
 
   def create_profiler_session(
       self,
@@ -629,7 +663,9 @@ class ControlPlaneClient:
     json_response = response.json()
     if logger.isEnabledFor(logging.DEBUG):
       logger.debug("Get ML Run response: %s", pprint.pformat(json_response))
-    return json_response
+    sanitized_response = self._sanitize_ml_run_dict(json_response)
+    self.last_updated_run = sanitized_response
+    return sanitized_response
 
   def update_ml_run(
       self,
@@ -671,7 +707,7 @@ class ControlPlaneClient:
     """
     for attempt in range(_MAX_RETRIES):
       try:
-        return self._attempt_update_ml_run(
+        result = self._attempt_update_ml_run(
             name,
             force,
             run_phase,
@@ -683,7 +719,11 @@ class ControlPlaneClient:
             workload_targets=workload_targets,
             update_mask=update_mask,
         )
+        sanitized_result = self._sanitize_ml_run_dict(result)
+        self.last_updated_run = sanitized_result
+        return sanitized_result
       except requests.exceptions.HTTPError as e:
+        self.last_updated_run = None
         logger.warning(
             "Update for ML run '%s' (phase: %s) failed. "
             "(Attempt %s/%s). Error: %s",
@@ -716,7 +756,14 @@ class ControlPlaneClient:
       update_mask: str = "*",
   ) -> Dict[str, Any]:
     """Attempt to update an existing ML run once."""
-    payload = self.get_ml_run(name)
+    if (
+        self.last_updated_run
+        and self.last_updated_run.get("etag")
+        and self._is_matching_run(self.last_updated_run, name)
+    ):
+      payload = copy.deepcopy(self.last_updated_run)
+    else:
+      payload = self.get_ml_run(name)
     need_update = force
 
     if display_name is not None and payload.get("displayName") != display_name:
@@ -818,10 +865,10 @@ class ControlPlaneClient:
         need_update = True
 
     if not need_update:
-      return payload
+      return self._sanitize_ml_run_dict(payload)
 
-    # Remove fields that are output-only
-    for field in ["createTime", "updateTime", "endTime"]:
+    # Remove fields that are output-only or internal protobuf Any wrappers
+    for field in ["createTime", "updateTime", "endTime", "state", "@type"]:
       payload.pop(field, None)
 
     run_url = f"{self.ml_runs_path}/{name}"
@@ -855,7 +902,7 @@ class ControlPlaneClient:
 
     # If it's a resource (no "done" field), return it directly
     if "done" not in json_response:
-      return json_response
+      return self._sanitize_ml_run_dict(json_response)
 
     operation = (
         self._wait_for_operation(json_response["name"])
@@ -867,4 +914,4 @@ class ControlPlaneClient:
       err = operation["error"]
       raise requests.exceptions.HTTPError(f"Operation failed: {err}")
 
-    return operation.get("response", operation)
+    return self._sanitize_ml_run_dict(operation.get("response", operation))

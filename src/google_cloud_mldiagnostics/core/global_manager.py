@@ -17,9 +17,7 @@
 import logging
 import threading
 import time
-from typing import Optional
-
-import requests
+from typing import Any, Dict, Optional
 
 from google_cloud_mldiagnostics import _version
 from google_cloud_mldiagnostics.clients import control_plane_client
@@ -30,7 +28,7 @@ from google_cloud_mldiagnostics.exporters import base_exporter
 from google_cloud_mldiagnostics.exporters import cloud_logging
 from google_cloud_mldiagnostics.exporters import otel_exporter
 from google_cloud_mldiagnostics.utils import host_utils
-
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +55,7 @@ class GlobalRunManager:
           ] = None
           cls._instance._metrics_exporter = None
           cls._instance._logs_exporter = None
+          cls._instance._resource_attributes = None
           cls._instance._control_plane_client: Optional[  # pyrefly: ignore[bad-assignment]
               control_plane_client.ControlPlaneClient
           ] = None
@@ -83,6 +82,7 @@ class GlobalRunManager:
 
       self._metrics_exporter: Optional[base_exporter.BaseMetricsExporter] = None
       self._logs_exporter: Optional[base_exporter.BaseLogsExporter] = None
+      self._resource_attributes: Optional[Dict[str, Any]] = None
       self._control_plane_client: Optional[
           control_plane_client.ControlPlaneClient
       ] = None
@@ -98,7 +98,8 @@ class GlobalRunManager:
     """Initialize or update the singleton with new run information.
 
     Args:
-        mlrun: The ML run to initialize.
+        mlrun: The ML run to initialize. It may be mutated (e.g., its name
+          updated to the canonical run ID) based on the control plane response.
     """
     with self._lock:
       if self._initialized:
@@ -112,11 +113,36 @@ class GlobalRunManager:
         self._accelerator_type = host_utils.get_accelerator_type(
             mlrun.framework, mlrun.serving_engine
         )
+
+      self._control_plane_client = control_plane_client.ControlPlaneClient(
+          project_id=mlrun.project,
+          location=mlrun.location,
+          environment=mlrun.environment,
+      )
+
+      is_master = True
+      if (
+          mlrun.orchestrator == mlrun_types.Orchestrator.GKE
+          and not host_utils.is_master_host(
+              mlrun.framework, mlrun.serving_engine
+          )
+      ) or not host_utils.is_local_master_process(mlrun.framework):
+        logger.info(
+            "Skipping ML run initialization on control plane (run_group=%s,"
+            " name=%s): Current host is not the master host.",
+            mlrun.run_group,
+            mlrun.name,
+        )
+        is_master = False
+      else:
+        self._create_ml_run_on_control_plane(mlrun)
+
       resource_attributes = {
           "project_id": mlrun.project,
           "run_id": mlrun.name,
           "location": mlrun.location,
       }
+      self._resource_attributes = resource_attributes
 
       self._current_logging_client = logging_client.LoggingClient(
           project_id=mlrun.project
@@ -212,24 +238,7 @@ class GlobalRunManager:
               )
           )
 
-      self._control_plane_client = control_plane_client.ControlPlaneClient(
-          project_id=mlrun.project,
-          location=mlrun.location,
-          environment=mlrun.environment,
-      )
-
-      if (
-          mlrun.orchestrator == mlrun_types.Orchestrator.GKE
-          and not host_utils.is_master_host(
-              mlrun.framework, mlrun.serving_engine
-          )
-      ) or not host_utils.is_local_master_process(mlrun.framework):
-        logger.info(
-            "Skipping ML run initialization on control plane (run_group=%s,"
-            " name=%s): Current host is not the master host.",
-            mlrun.run_group,
-            mlrun.name,
-        )
+      if not is_master:
         self._initialized = True
         return
 
@@ -253,7 +262,7 @@ class GlobalRunManager:
                 body={"userConfigs": mlrun.configs.get("userConfigs")},
                 labels={
                     "namespace": "mlrun_configs",
-                }
+                },
             )
             user_composite_exporter = base_exporter.CompositeLogsExporter(
                 user_config_logs_exporters, resource_attributes
@@ -274,8 +283,55 @@ class GlobalRunManager:
             " invalid type"
         )
 
-      self._create_ml_run_on_control_plane(mlrun)
       self._initialized = True
+
+  def _sync_exporters_run_id(self, run_id: str) -> None:
+    """Synchronizes run_id on active exporters and resource attributes."""
+    if hasattr(self, "_resource_attributes") and isinstance(
+        self._resource_attributes, dict
+    ):
+      self._resource_attributes["run_id"] = run_id
+
+    exporters = []
+    if self._metrics_exporter is not None:
+      exporters.append(self._metrics_exporter)
+    if self._logs_exporter is not None:
+      exporters.append(self._logs_exporter)
+
+    for exp in exporters:
+      all_to_sync = [exp]
+      if hasattr(exp, "_exporters") and isinstance(
+          exp._exporters, (list, tuple)
+      ):
+        all_to_sync.extend(exp._exporters)
+
+      for target in all_to_sync:
+        if hasattr(target, "_run_id"):
+          target._run_id = run_id
+        if hasattr(target, "resource_attributes") and isinstance(
+            target.resource_attributes, dict
+        ):
+          target.resource_attributes["run_id"] = run_id
+
+  def _update_ml_run_from_response(
+      self, response: Optional[Dict[str, Any]]
+  ) -> None:
+    """Updates active ML run state from an API response.
+
+    Mutates ``self._ml_run.name`` in-place to the canonical run ID returned
+    by the control plane and synchronizes resource attributes across exporters.
+
+    Args:
+        response: The response dictionary from the control plane API.
+    """
+    if isinstance(response, dict):
+      if self._ml_run is not None:
+        resp_name = response.get("name")
+        if isinstance(resp_name, str) and resp_name.strip():
+          resp_id = resp_name.strip("/").split("/")[-1]
+          if resp_id:
+            self._ml_run.name = resp_id
+            self._sync_exporters_run_id(resp_id)
 
   def _create_ml_run_on_control_plane(self, mlrun: mlrun_types.MLRun) -> None:
     """Helper to call create_ml_run on control plane client."""
@@ -307,21 +363,13 @@ class GlobalRunManager:
           mlrun.accelerator_orchestrator.value.lower()
       )
 
-    if (
-        mlrun.application_framework
-        != mlrun_types.ApplicationFramework.NONE
-    ):
+    if mlrun.application_framework != mlrun_types.ApplicationFramework.NONE:
       labels["application_framework"] = (
           mlrun.application_framework.value.lower()
       )
 
-    if (
-        mlrun.rl_orchestrator
-        != mlrun_types.RlOrchestrator.NONE
-    ):
-      labels["rl_orchestrator"] = (
-          mlrun.rl_orchestrator.value.lower()
-      )
+    if mlrun.rl_orchestrator != mlrun_types.RlOrchestrator.NONE:
+      labels["rl_orchestrator"] = mlrun.rl_orchestrator.value.lower()
     try:
       response = self._control_plane_client.create_ml_run(  # pyrefly: ignore[missing-attribute]
           name=mlrun.name,
@@ -340,8 +388,7 @@ class GlobalRunManager:
           "Successfully created ML run: %s",
           response.get("name") if response else "unknown",
       )
-      if response and "name" in response:
-        self._ml_run.name = response.get("name", "unknown").split("/")[-1]  # pyrefly: ignore[missing-attribute]
+      self._update_ml_run_from_response(response)
 
     except requests.exceptions.HTTPError as e_create:
       if e_create.response is not None and e_create.response.status_code == 409:
@@ -349,7 +396,8 @@ class GlobalRunManager:
             "ML run %r already exists. Updating existing run details.",
             mlrun.name,
         )
-        self._control_plane_client.update_ml_run(  # pyrefly: ignore[missing-attribute]
+        # pyrefly: ignore[missing-attribute]
+        response = self._control_plane_client.update_ml_run(
             name=mlrun.name,
             display_name=mlrun.display_name,
             tools=tools,
@@ -359,6 +407,7 @@ class GlobalRunManager:
             configs=mlrun.configs,
             workload_targets=mlrun.workload_targets,
         )
+        self._update_ml_run_from_response(response)
       else:
         logger.error("Failed to create ML run: %s", e_create)
         raise
@@ -646,6 +695,14 @@ class GlobalRunManager:
         return self._control_plane_client
       return None
 
+  @property
+  def last_updated_run(self) -> Optional[Dict[str, Any]]:
+    """Get the raw dictionary of the last updated run from the control plane."""
+    with self._lock:
+      if self._control_plane_client is not None:
+        return self._control_plane_client.last_updated_run
+      return None
+
   def clear(self) -> None:
     """Clear the current run state."""
     with self._lock:
@@ -655,6 +712,7 @@ class GlobalRunManager:
         self._timer_ps_creation = None
       self._ps_creation_start_time = None
       self._ml_run = None
+      self._resource_attributes = None
       self._current_logging_client = None
       self._control_plane_client = None
       self._initialized = False
@@ -731,3 +789,13 @@ def get_logging_client() -> Optional[logging_client.LoggingClient]:
   """
   manager = get_global_run_manager()
   return manager.logging_client
+
+
+def get_last_updated_run() -> Optional[Dict[str, Any]]:
+  """Get the last updated run dict from the global manager.
+
+  Returns:
+      The last updated run dictionary or None if not initialized.
+  """
+  manager = get_global_run_manager()
+  return manager.last_updated_run

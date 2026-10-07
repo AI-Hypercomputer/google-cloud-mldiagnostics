@@ -111,7 +111,8 @@ def initialize_mlrun(
         Default is NONE.
 
   Returns:
-      The initialized ML run object.
+      The initialized ML run object. It may be mutated (e.g., its name
+      updated to the canonical run ID) based on the control plane response.
   """
   # Combine default configs with user configs.
   software_configs = config_utils.get_software_config(
