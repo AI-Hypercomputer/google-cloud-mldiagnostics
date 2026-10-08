@@ -47,6 +47,17 @@ def is_torch_local_master_process() -> bool:
   return get_torch_local_process_index() == 0
 
 
+def get_torch_local_world_size() -> int:
+  """Returns the number of processes on this host for PyTorch (defaults to 1)."""
+  val = os.environ.get("LOCAL_WORLD_SIZE")
+  if val is not None:
+    try:
+      return int(val)
+    except ValueError:
+      _logger.warning("Invalid integer value for LOCAL_WORLD_SIZE: %r", val)
+  return 1
+
+
 def get_accelerator_type() -> metric_types.AcceleratorType:
   """Returns the accelerator type by inspecting PyTorch devices."""
   if (

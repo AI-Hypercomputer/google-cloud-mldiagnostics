@@ -535,6 +535,15 @@ def get_local_process_index(
   return 0
 
 
+def get_local_world_size(
+    framework: mlrun_types.Framework = mlrun_types.Framework.JAX,
+) -> int:
+  """Returns the number of processes sharing the current host."""
+  if framework == mlrun_types.Framework.PYTORCH:
+    return _import_torch_host_module().get_torch_local_world_size()
+  return 1
+
+
 def is_local_master_process(
     framework: mlrun_types.Framework = mlrun_types.Framework.JAX,
 ) -> bool:

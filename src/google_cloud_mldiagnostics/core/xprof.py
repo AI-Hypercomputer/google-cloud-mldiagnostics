@@ -129,6 +129,12 @@ class JaxProfilerEngine(BaseProfilerEngine):
     return True
 
   def start_server(self, port: int) -> None:
+    if not host_utils.is_local_master_process():
+      logger.info(
+          "Skipping JAX on-demand xprof server start on non-local-master"
+          " process."
+      )
+      return
     logger.info("Defaulting to JAX framework for on-demand profiling.")
     import jax  # pylint: disable=g-import-not-at-top
 
@@ -143,6 +149,9 @@ class JaxProfilerEngine(BaseProfilerEngine):
 class PyTorchProfilerEngine(BaseProfilerEngine):
   """Profiler engine implementation for PyTorch framework."""
 
+  def __init__(self):
+    self._proxy_server: typing.Any | None = None
+
   def should_report_session(self) -> bool:
     return False
 
@@ -154,19 +163,23 @@ class PyTorchProfilerEngine(BaseProfilerEngine):
       logger.info("Synchronizing PyTorch distributed ranks via barrier.")
       torch.distributed.barrier()
 
-  def start_trace(self, gcs_dir: str, session_id: str) -> typing.Any:
-    import torch  # pylint: disable=g-import-not-at-top
+  def _get_tpu_profiler_config(self, gcs_dir: str) -> typing.Any:
     from torch_tpu._internal.profiler import TpuProfilerConfig  # pylint: disable=g-import-not-at-top  # pyrefly: ignore[missing-import]
 
     worker_rank = str(
         host_utils.get_process_index(mlrun_types.Framework.PYTORCH)
     )
-    config = TpuProfilerConfig(
+    return TpuProfilerConfig(
         host_tracer_level=2,
         device_tracer_level=1,
         run_dir=gcs_dir,
         worker_rank=worker_rank,
     )
+
+  def start_trace(self, gcs_dir: str, session_id: str) -> typing.Any:
+    import torch  # pylint: disable=g-import-not-at-top
+
+    config = self._get_tpu_profiler_config(gcs_dir)
     prof = torch.profiler.profile(
         activities=[
             torch.profiler.ProfilerActivity.CPU,
@@ -189,17 +202,8 @@ class PyTorchProfilerEngine(BaseProfilerEngine):
       self, gcs_dir: str, session_id: str
   ) -> typing.ContextManager[typing.Any]:
     import torch  # pylint: disable=g-import-not-at-top
-    from torch_tpu._internal.profiler import TpuProfilerConfig  # pylint: disable=g-import-not-at-top  # pyrefly: ignore[missing-import]
 
-    worker_rank = str(
-        host_utils.get_process_index(mlrun_types.Framework.PYTORCH)
-    )
-    config = TpuProfilerConfig(
-        host_tracer_level=2,
-        device_tracer_level=1,
-        run_dir=gcs_dir,
-        worker_rank=worker_rank,
-    )
+    config = self._get_tpu_profiler_config(gcs_dir)
     self._synchronize_distributed_barrier()
     return torch.profiler.profile(
         activities=[
@@ -222,18 +226,83 @@ class PyTorchProfilerEngine(BaseProfilerEngine):
 
   def start_server(self, port: int) -> None:
     logger.info("Detected PyTorch framework for on-demand profiling.")
-    from torch_tpu._internal.profiler import start_server  # pyrefly: ignore[missing-import] # pylint: disable=g-import-not-at-top
+    from torch_tpu._internal.profiler import start_server as torch_start_server  # pyrefly: ignore[missing-import] # pylint: disable=g-import-not-at-top
 
-    start_server(port)
-    logger.info(
-        "Started PyTorch TPU on-demand profiler server on port %d.", port
+    local_world_size = host_utils.get_local_world_size(
+        mlrun_types.Framework.PYTORCH
+    )
+    local_rank = host_utils.get_local_process_index(
+        mlrun_types.Framework.PYTORCH
     )
 
-  def stop_server(self) -> None:
-    from torch_tpu._internal.profiler import stop_server  # pyrefly: ignore[missing-import] # pylint: disable=g-import-not-at-top
+    if local_world_size <= 1:
+      try:
+        torch_start_server(port)
+        logger.info(
+            "Started PyTorch TPU on-demand profiler server directly on port %d.",
+            port,
+        )
+      except Exception as e:  # pylint: disable=broad-exception-caught
+        logger.warning(
+            "Failed to start PyTorch TPU profiler server on port %d: %s",
+            port,
+            e,
+        )
+      return
 
-    stop_server()
-    logger.info("Stopped PyTorch TPU on-demand profiler server.")
+    from google_cloud_mldiagnostics.core import xprof_proxy  # pylint: disable=g-import-not-at-top
+
+    # In multi-process mode (e.g. 4 processes per host on TPU v5e), each local rank
+    # deterministically binds its underlying C++ profiler server to loopback port
+    # (base_internal_port + local_rank).
+    base_internal_port = port + 1
+    internal_port = xprof_proxy.get_internal_port(
+        local_rank, base_port=base_internal_port
+    )
+    try:
+      torch_start_server(internal_port)
+      logger.info(
+          "Started PyTorch TPU C++ profiler server for local rank %d on"
+          " loopback port %d.",
+          local_rank,
+          internal_port,
+      )
+    except Exception as e:  # pylint: disable=broad-exception-caught
+      logger.warning(
+          "Failed to start PyTorch TPU C++ profiler server for local rank %d on"
+          " port %d: %s",
+          local_rank,
+          internal_port,
+          e,
+      )
+
+    # Only the host-local master (LOCAL_RANK 0) hosts the gRPC proxy on the external port.
+    if host_utils.is_local_master_process(mlrun_types.Framework.PYTORCH):
+      self._proxy_server = xprof_proxy.OnDemandXprofProxyServer(
+          port=port,
+          local_world_size=local_world_size,
+          base_internal_port=base_internal_port,
+      )
+      self._proxy_server.start()
+      logger.info(
+          "Started PyTorch TPU on-demand profiler proxy on external port %d,"
+          " fanning out to %d local ranks.",
+          port,
+          local_world_size,
+      )
+
+  def stop_server(self) -> None:
+    if self._proxy_server is not None:
+      self._proxy_server.stop()
+      self._proxy_server = None
+
+    from torch_tpu._internal.profiler import stop_server as torch_stop_server  # pyrefly: ignore[missing-import] # pylint: disable=g-import-not-at-top
+
+    try:
+      torch_stop_server()
+      logger.info("Stopped PyTorch TPU on-demand profiler server.")
+    except Exception as e:  # pylint: disable=broad-exception-caught
+      logger.warning("Error stopping PyTorch TPU profiler server: %s", e)
 
 
 def get_profiler_engine(
@@ -443,7 +512,7 @@ class Xprof:
           log_msg="started",
       )
     except Exception as e:  # pylint: disable=broad-exception-caught
-      logger.error("Error starting JAX profiler: %s", e)
+      logger.error("Error starting profiler: %s", e)
       self._update_session_state(
           session_phase="FAILED",
       )
@@ -512,7 +581,7 @@ class Xprof:
           log_msg="context_started",
       )
     except Exception as e:  # pylint: disable=broad-exception-caught
-      logger.error("Error starting JAX profiler in context manager: %s", e)
+      logger.error("Error starting profiler in context manager: %s", e)
       self._update_session_state(
           session_phase="FAILED",
       )
@@ -591,6 +660,7 @@ class _OnDemandXprofManager:
   def __init__(self):
     self._started = False
     self._lock = threading.Lock()
+    self._engine = None
 
   def start(self, port: int = 9999):
     """Starts the on-demand xprof server if not already running."""
@@ -603,8 +673,8 @@ class _OnDemandXprofManager:
         current_run = global_manager.get_current_run()
         framework = current_run.framework if current_run else None
 
-        engine = get_profiler_engine(framework)
-        engine.start_server(port)
+        self._engine = get_profiler_engine(framework)
+        self._engine.start_server(port)
 
         self._started = True
         logger.info("On-demand xprof profiling session started.")
@@ -616,12 +686,9 @@ class _OnDemandXprofManager:
     with self._lock:
       if self._started:
         logger.info("Stopping on-demand xprof profiling session.")
-
-        current_run = global_manager.get_current_run()
-        framework = current_run.framework if current_run else None
-
-        engine = get_profiler_engine(framework)
-        engine.stop_server()
+        if self._engine is not None:
+          self._engine.stop_server()
+          self._engine = None
 
         self._started = False
         logger.info("On-demand xprof profiling session stopped.")
