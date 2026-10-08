@@ -73,6 +73,7 @@ class Orchestrator(str, enum.Enum):
   GKE = "GKE"
   SLURM = "SLURM"
   CUSTOM = "CUSTOM"
+  NONE = "NONE"
 
 
 class ConfigDict(dict):

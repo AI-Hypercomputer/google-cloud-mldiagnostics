@@ -22,6 +22,7 @@ from typing import Any, Dict, Optional
 from google_cloud_mldiagnostics import _version
 from google_cloud_mldiagnostics.clients import control_plane_client
 from google_cloud_mldiagnostics.clients import logging_client
+from google_cloud_mldiagnostics.clients import self_hosted_diagon_service_client
 from google_cloud_mldiagnostics.custom_types import metric_types
 from google_cloud_mldiagnostics.custom_types import mlrun_types
 from google_cloud_mldiagnostics.exporters import base_exporter
@@ -85,6 +86,7 @@ class GlobalRunManager:
       self._resource_attributes: Optional[Dict[str, Any]] = None
       self._control_plane_client: Optional[
           control_plane_client.ControlPlaneClient
+          | self_hosted_diagon_service_client.SelfHostedDiagonServiceClient
       ] = None
       self._timer_ps_creation: threading.Timer | None = None
       self._ps_creation_start_time: float | None = None
@@ -114,19 +116,29 @@ class GlobalRunManager:
             mlrun.framework, mlrun.serving_engine
         )
 
-      self._control_plane_client = control_plane_client.ControlPlaneClient(
-          project_id=mlrun.project,
-          location=mlrun.location,
-          environment=mlrun.environment,
-      )
+      self_contained = bool(mlrun.control_plane_url)
+      if self_contained:
+        self._control_plane_client = (
+            self_hosted_diagon_service_client.SelfHostedDiagonServiceClient(
+                control_plane_url=mlrun.control_plane_url or "",
+                cluster_id=mlrun.cluster_id,
+            )
+        )
+      else:
+        self._control_plane_client = control_plane_client.ControlPlaneClient(
+            project_id=mlrun.project,
+            location=mlrun.location,
+            environment=mlrun.environment,
+        )
 
       is_master = True
       if (
-          mlrun.orchestrator == mlrun_types.Orchestrator.GKE
+          (mlrun.orchestrator == mlrun_types.Orchestrator.GKE or self_contained)
           and not host_utils.is_master_host(
               mlrun.framework, mlrun.serving_engine
           )
-      ) or not host_utils.is_local_master_process(mlrun.framework):
+          or not host_utils.is_local_master_process(mlrun.framework)
+      ):
         logger.info(
             "Skipping ML run initialization on control plane (run_group=%s,"
             " name=%s): Current host is not the master host.",
@@ -144,14 +156,17 @@ class GlobalRunManager:
       }
       self._resource_attributes = resource_attributes
 
-      self._current_logging_client = logging_client.LoggingClient(
-          project_id=mlrun.project
+      self._current_logging_client = (
+          None
+          if self_contained
+          else logging_client.LoggingClient(project_id=mlrun.project)
       )
 
       metrics_exporter_config = mlrun.metrics_exporter_config or {}
-      mode = metrics_exporter_config.get("mode", ["cloud_logging"])
+      default_mode = ["otel"] if self_contained else ["cloud_logging"]
+      mode = metrics_exporter_config.get("mode", default_mode)
       user_config_destinations = metrics_exporter_config.get(
-          "userConfig", ["cloud_logging"]
+          "userConfig", default_mode
       )
 
       inner_metrics_exporters = []
@@ -188,14 +203,18 @@ class GlobalRunManager:
               otel_logs_ok,
           )
 
-      if "cloud_logging" in mode or not inner_metrics_exporters:
+      if not self_contained and (
+          "cloud_logging" in mode or not inner_metrics_exporters
+      ):
         cloud_metrics_exporter = cloud_logging.CloudLoggingMetricsExporter(
             resource_attributes, client=self._current_logging_client
         )
         inner_metrics_exporters.append(cloud_metrics_exporter)
         logger.info("Cloud Logging metrics exporting enabled.")
 
-      if "cloud_logging" in mode or not inner_logs_exporters:
+      if not self_contained and (
+          "cloud_logging" in mode or not inner_logs_exporters
+      ):
         cloud_logs_exporter = cloud_logging.CloudLoggingLogsExporter(
             resource_attributes, client=self._current_logging_client
         )
@@ -225,7 +244,7 @@ class GlobalRunManager:
                 "OpenTelemetry logs dependencies not available for userConfig."
             )
 
-      if (
+      if not self_contained and (
           "cloud_logging" in user_config_destinations
           or not user_config_logs_exporters
       ):
@@ -331,7 +350,11 @@ class GlobalRunManager:
           resp_id = resp_name.strip("/").split("/")[-1]
           if resp_id:
             self._ml_run.name = resp_id
+            if bool(self._ml_run.control_plane_url):
+              self._ml_run.ml_run_id = resp_id
             self._sync_exporters_run_id(resp_id)
+        if bool(self._ml_run.control_plane_url) and response.get("clusterId"):
+          self._ml_run.cluster_id = response["clusterId"]
 
   def _create_ml_run_on_control_plane(self, mlrun: mlrun_types.MLRun) -> None:
     """Helper to call create_ml_run on control plane client."""
@@ -504,6 +527,14 @@ class GlobalRunManager:
         return
 
       client = self._control_plane_client
+
+      if isinstance(
+          client,
+          self_hosted_diagon_service_client.SelfHostedDiagonServiceClient,
+      ):
+        self._ps_creation_start_time = None
+        return
+
       try:
         hostname = host_utils.get_hostname()
         workload_details = self._ml_run.workload_details or {}
@@ -686,7 +717,10 @@ class GlobalRunManager:
   @property
   def control_plane_client(
       self,
-  ) -> Optional[control_plane_client.ControlPlaneClient]:
+  ) -> Optional[
+      control_plane_client.ControlPlaneClient
+      | self_hosted_diagon_service_client.SelfHostedDiagonServiceClient
+  ]:
     """Get the current control plane client."""
     with self._lock:
       if self._ml_run and host_utils.is_master_host(
@@ -700,7 +734,7 @@ class GlobalRunManager:
     """Get the raw dictionary of the last updated run from the control plane."""
     with self._lock:
       if self._control_plane_client is not None:
-        return self._control_plane_client.last_updated_run
+        return getattr(self._control_plane_client, "last_updated_run", None)
       return None
 
   def clear(self) -> None:

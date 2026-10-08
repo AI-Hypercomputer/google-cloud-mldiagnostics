@@ -27,6 +27,7 @@ import threading
 from typing import Any, Callable
 
 from google_cloud_mldiagnostics.clients import control_plane_client
+from google_cloud_mldiagnostics.clients import self_hosted_diagon_service_client
 from google_cloud_mldiagnostics.core import global_manager
 from google_cloud_mldiagnostics.custom_types import exceptions
 from google_cloud_mldiagnostics.custom_types import metric_types
@@ -452,7 +453,9 @@ class MetricsRecorderThread:
 
   def _get_active_run_and_client(self) -> tuple[
       mlrun_types.MLRun,
-      control_plane_client.ControlPlaneClient | None,
+      control_plane_client.ControlPlaneClient
+      | self_hosted_diagon_service_client.SelfHostedDiagonServiceClient
+      | None,
   ]:
     """Get the active run and the logging client.
 

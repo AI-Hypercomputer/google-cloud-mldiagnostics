@@ -14,12 +14,31 @@
 
 """Module for creating and managing ML runs."""
 
+import hashlib
+import logging
+import os
 import re
 from typing import Any
+import uuid
 
 from google_cloud_mldiagnostics.core import create_mlrun
 from google_cloud_mldiagnostics.custom_types import exceptions
 from google_cloud_mldiagnostics.custom_types import mlrun_types
+import requests
+
+logger = logging.getLogger(__name__)
+
+
+def _generate_self_hosted_run_identifier(
+    workload_id: str, namespace: str, cluster_id: str
+) -> str:
+  """Generates a deterministic UUID matching the Cluster Agent SHA-256 ID."""
+  data = f"{namespace}/{workload_id}/{cluster_id}".encode("utf-8")
+  digest = hashlib.sha256(data).digest()
+  byte_arr = bytearray(digest[:16])
+  byte_arr[6] = (byte_arr[6] & 0x0F) | 0x40
+  byte_arr[8] = (byte_arr[8] & 0x3F) | 0x80
+  return str(uuid.UUID(bytes=bytes(byte_arr)))
 
 
 def normalize_gcs_path(gcs_path):
@@ -58,6 +77,8 @@ def machinelearning_run(
     run_group: str = "",
     configs: dict[str, Any] | None = None,
     gcs_path: str | None = None,
+    base_url: str | None = None,
+    cluster_id: str | None = None,
     project: str | None = None,
     region: str | None = "us-central1",
     metrics_record_interval_sec: float = 10.0,
@@ -90,6 +111,8 @@ def machinelearning_run(
       run_group: The run set this run belongs to.
       configs: dict of configuration parameters.
       gcs_path: GCS path for storing run artifacts.
+      base_url: Optional URL for the self-hosted Diagon Control Plane.
+      cluster_id: Optional cluster identifier for self-hosted runs.
       project: The Google Cloud project ID.
       region: The Google Cloud region. Default is us-central1.
       metrics_record_interval_sec: The interval in seconds for recording system
@@ -179,6 +202,30 @@ def machinelearning_run(
         " mlrun_types.RlOrchestrator or str."
     )
 
+  base_url = base_url or os.environ.get("DIAGON_BASE_URL")
+  agent_url = os.environ.get("DIAGON_AGENT_URL")
+  self_contained = bool(base_url)
+
+  ml_run_id = None
+  namespace = None
+
+  if self_contained:
+    namespace = os.environ.get("POD_NAMESPACE") or "default"
+    workload_id = run_workload_id or ""
+    cluster_id = cluster_id or os.environ.get("DIAGON_CLUSTER_ID", "")
+    if not cluster_id and agent_url:
+      try:
+        resp = requests.get(f"{agent_url.rstrip('/')}/v1/agent-info", timeout=5)
+        resp.raise_for_status()
+        cluster_id = resp.json().get("cluster_id", "")
+      except requests.RequestException as e:
+        logger.warning(
+            "Failed to fetch cluster_id from Diagon Agent (%s); continuing.", e
+        )
+    ml_run_id = _generate_self_hosted_run_identifier(
+        workload_id, namespace, cluster_id
+    )
+
   gcs_path = normalize_gcs_path(gcs_path)
 
   return create_mlrun.initialize_mlrun(
@@ -200,4 +247,9 @@ def machinelearning_run(
       accelerator_orchestrator=accelerator_orchestrator,
       application_framework=application_framework,
       rl_orchestrator=rl_orchestrator,
+      base_url=base_url,
+      cluster_id=cluster_id,
+      ml_run_id=ml_run_id,
+      workload_id=run_workload_id,
+      namespace=namespace,
   )
