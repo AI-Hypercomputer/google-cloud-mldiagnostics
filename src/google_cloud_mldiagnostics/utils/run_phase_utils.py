@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import atexit
 import logging
+import os
 import signal
 import sys
 import threading
@@ -36,6 +37,18 @@ from google_cloud_mldiagnostics.custom_types import mlrun_types
 from google_cloud_mldiagnostics.utils import host_utils
 
 logger = logging.getLogger(__name__)
+
+# The SDK SIGTERM handler is disabled by default because overriding SIGTERM
+# breaks framework and user handlers such as JAX's preemption handling
+# (b/567346696). Set this environment variable to "1", "true" or "yes" to opt a
+# workload in.
+SIGTERM_HANDLER_ENV_VAR = "DIAGON_SDK_HANDLE_SIGTERM"
+
+
+def _sigterm_handler_enabled() -> bool:
+  """Returns whether the workload opted in to the SDK SIGTERM handler."""
+  value = os.environ.get(SIGTERM_HANDLER_ENV_VAR, "")
+  return value.strip().lower() in ("1", "true", "yes")
 
 
 class RunPhaseMonitor:
@@ -148,7 +161,17 @@ class RunPhaseMonitor:
       logger.info("Starting run phase monitoring...")
       sys.excepthook = self._handle_unhandled_exception
       atexit.register(self._on_normal_exit)
-      signal.signal(signal.SIGTERM, self._handle_sigterm)
+      if _sigterm_handler_enabled():
+        logger.info(
+            "%s is set; installing SDK SIGTERM handler.",
+            SIGTERM_HANDLER_ENV_VAR,
+        )
+        signal.signal(signal.SIGTERM, self._handle_sigterm)
+      else:
+        logger.info(
+            "SDK SIGTERM handler disabled; set %s=1 to enable it.",
+            SIGTERM_HANDLER_ENV_VAR,
+        )
       self._monitoring_started = True
       self._ml_run_failed = False
       with RunPhaseMonitor._active_instance_lock:
