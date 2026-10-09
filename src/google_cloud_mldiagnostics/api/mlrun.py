@@ -208,10 +208,16 @@ def machinelearning_run(
 
   ml_run_id = None
   namespace = None
+  workload_id = run_workload_id
 
   if self_contained:
     namespace = os.environ.get("POD_NAMESPACE") or "default"
-    workload_id = run_workload_id or ""
+    workload_id = (
+        run_workload_id
+        or os.environ.get("DIAGON_WORKLOAD_ID")
+        or os.environ.get("WORKLOAD_ID")
+        or name
+    )
     cluster_id = cluster_id or os.environ.get("DIAGON_CLUSTER_ID", "")
     if not cluster_id and agent_url:
       try:
@@ -250,6 +256,6 @@ def machinelearning_run(
       base_url=base_url,
       cluster_id=cluster_id,
       ml_run_id=ml_run_id,
-      workload_id=run_workload_id,
+      workload_id=workload_id,
       namespace=namespace,
   )
