@@ -172,7 +172,7 @@ def _get_slurm_workload_details() -> dict[str, Any] | None:
     return None
 
   cluster_path = (
-      f"/projects/{gcp.get_project_id()}/locations/{gcp.get_instance_zone()}/clusters/{cluster_name}"
+      f"projects/{gcp.get_project_id()}/locations/{gcp.get_instance_zone()}/clusters/{cluster_name}"
   )
 
   job_name = os.getenv("SLURM_JOB_NAME")
