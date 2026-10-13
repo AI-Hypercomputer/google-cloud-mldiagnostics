@@ -164,7 +164,7 @@ class PyTorchProfilerEngine(BaseProfilerEngine):
       torch.distributed.barrier()
 
   def _get_tpu_profiler_config(self, gcs_dir: str) -> typing.Any:
-    from torch_tpu._internal.profiler import TpuProfilerConfig  # pylint: disable=g-import-not-at-top  # pyrefly: ignore[missing-import]
+    from torch.tpu.profiler import TpuProfilerConfig  # pylint: disable=g-import-not-at-top  # pyrefly: ignore[missing-import]
 
     worker_rank = str(
         host_utils.get_process_index(mlrun_types.Framework.PYTORCH)
