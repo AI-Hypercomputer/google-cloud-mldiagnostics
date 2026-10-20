@@ -63,7 +63,7 @@ def get_accelerator_type() -> metric_types.AcceleratorType:
   if (
       hasattr(torch, "tpu")
       and torch.accelerator.is_available()
-      and torch.accelerator.current_accelerator().type == "tpu"
+      and torch.accelerator.current_accelerator().type == "tpu"  # pyrefly: ignore[missing-attribute]
   ):
     return metric_types.AcceleratorType.TPU
 
