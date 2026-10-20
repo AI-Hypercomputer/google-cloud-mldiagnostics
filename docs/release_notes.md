@@ -37,6 +37,26 @@ google-cloud-mldiagnostics is [available in PyPI](https://pypi.org/project/googl
 
 ## Releases
 
+### v1.0.10
+
+#### Changes
+
+- **Robust Framework Preemption & SIGTERM Handling**:
+  - In JAX distributed workloads (`jax.distributed.initialize()`), JAX
+    coordinates preemption handling across slices. The SDK now deploys an
+    out-of-band coordination watcher using a bounded blocking wait
+    (`client.blocking_key_value_get`) that catches preemption notices instantly
+    upon arrival and reports the run as `FAILED` without interrupting JAX/Orbax
+    step checkpoint flushing to Cloud Storage.
+
+- **vLLM Phased Profiling Improvements**:
+  - **Phased Profiling Directory Flag**: Added the `--phased_profiling_dir`
+    argument to the `run_vllm` command wrapper to specify the base GCS
+    destination directory for JAX phased profiling traces. The wrapper appends
+    `<run_name>/plugins/profile/` and exports it as `PHASED_PROFILING_DIR` to
+    the `vllm serve` process, resolving Ray multi-host worker environment
+    variable shadowing in distributed deployments (e.g. GKE LeaderWorkerSet).
+
 ### v1.0.9
 
 #### Changes
