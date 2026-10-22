@@ -384,8 +384,9 @@ class Xprof:
       )
 
     # Set up the GCS directory path
-    identifier = self._resolved_run.name
-    self._gcs_profile_dir = f"{self._resolved_run.gcs_path}/{identifier}"
+    self._gcs_profile_dir = global_manager.get_profile_base_dir(
+        self._resolved_run
+    )
     self._engine = get_profiler_engine(self._resolved_run.framework)
 
     if self._engine is None:

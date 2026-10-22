@@ -133,7 +133,7 @@ class GlobalRunManager:
 
       is_master = True
       if (
-          (mlrun.orchestrator == mlrun_types.Orchestrator.GKE or self_contained)
+          mlrun.orchestrator == mlrun_types.Orchestrator.GKE
           and not host_utils.is_master_host(
               mlrun.framework, mlrun.serving_engine
           )
@@ -500,6 +500,15 @@ class GlobalRunManager:
       timer = self._timer_ps_creation
       if timer is not None:
         logger.info("Cancelling profiler session creation timer.")
+        timer_args = getattr(timer, "args", ())
+        if (
+            not create_new_session
+            and isinstance(timer_args, tuple)
+            and len(timer_args) >= 2
+            and timer_args[0] is True
+            and timer_args[1] == session_id
+        ):
+          create_new_session = True
         timer.cancel()
         self._timer_ps_creation = None
 
@@ -528,63 +537,74 @@ class GlobalRunManager:
 
       client = self._control_plane_client
 
-      if isinstance(
-          client,
-          self_hosted_diagon_service_client.SelfHostedDiagonServiceClient,
-      ):
-        self._ps_creation_start_time = None
-        return
-
       try:
+        if not self._ml_run.gcs_path:
+          logger.error(
+              "No GCS path found for ML Run %r, aborting session creation.",
+              self._ml_run.name,
+          )
+          self._ps_creation_start_time = None
+          return
         hostname = host_utils.get_hostname()
-        workload_details = self._ml_run.workload_details or {}
-        if not workload_details.get("targets", None):
-          # Attempt to fetch targets, and if missing, try updating
-          # workload_details and fetch again as the backend might populate it.
-          for i in range(self._MAX_GET_ML_RUN_ATTEMPTS):
-            resp = client.get_ml_run(self._ml_run.name)
-            workload_details = resp.get("workloadDetails", {})
-            self._ml_run.workload_details = workload_details
+        if isinstance(
+            client,
+            self_hosted_diagon_service_client.SelfHostedDiagonServiceClient,
+        ):
+          profiler_target = hostname
+          base_dir = get_profile_base_dir(self._ml_run)
+          profile_path = f"{base_dir}/plugins/profile/{session_id}"
+        else:
+          workload_details = self._ml_run.workload_details or {}
+          if not workload_details.get("targets", None):
+            # Attempt to fetch targets, and if missing, try updating
+            # workload_details and fetch again as the backend might populate it.
+            for i in range(self._MAX_GET_ML_RUN_ATTEMPTS):
+              resp = client.get_ml_run(self._ml_run.name)
+              workload_details = resp.get("workloadDetails", {})
+              self._ml_run.workload_details = workload_details
 
-            if len(workload_details.get("targets", [])) > 0:
+              if len(workload_details.get("targets", [])) > 0:
+                break
+
+              if i == 0:
+                logger.info(
+                    "No targets found in ML Run workload details, trying to"
+                    " update ML Run."
+                )
+                client.update_ml_run(
+                    name=self._ml_run.name,
+                    force=True,
+                    run_phase=mlrun_types.RunPhase.PHASE_ACTIVE.value,
+                    update_mask="workload_details",
+                    workload_targets=self._ml_run.workload_targets,
+                )
+                continue
+
+              logger.error(
+                  "No targets found in ML Run workload details even after"
+                  " update ML Run, aborting session creation."
+              )
+              self._ps_creation_start_time = None
+              return
+
+          profiler_target = None
+          for target in workload_details.get("targets", []):
+            # In GKE, hostname is the pod name without unique suffix.
+            # In Slurm / Other orchestrators, hostname is the instance name.
+            if target.get("hostname", "") == hostname or target.get(
+                "displayName", ""
+            ).startswith(hostname):
+              profiler_target = target.get("displayName", None)
               break
+          profile_path = self._ml_run.gcs_path + "/" + session_id  # pyrefly: ignore[unsupported-operation]
 
-            if i == 0:
-              logger.info(
-                  "No targets found in ML Run workload details, trying to"
-                  " update ML Run."
-              )
-              client.update_ml_run(
-                  name=self._ml_run.name,
-                  force=True,
-                  run_phase=mlrun_types.RunPhase.PHASE_ACTIVE.value,
-                  update_mask="workload_details",
-                  workload_targets=self._ml_run.workload_targets,
-              )
-              continue
-
-            logger.error(
-                "No targets found in ML Run workload details even after"
-                " update ML Run, aborting session creation."
-            )
-            return
-
-        profiler_target = None
-        for target in workload_details.get("targets", []):
-          # In GKE, hostname is the pod name without unique suffix.
-          # In Slurm / Other orchestrators, hostname is the instance name.
-          if target.get("hostname", "") == hostname or target.get(
-              "displayName", ""
-          ).startswith(hostname):
-            profiler_target = target.get("displayName", None)
-            break
-
-        if profiler_target is None:
+        if not profiler_target:
           logger.error(
               "No profiler target found for hostname %r, aborting session"
               " creation.",
               hostname,
           )
+          self._ps_creation_start_time = None
           return
 
         report_function = (
@@ -595,7 +615,7 @@ class GlobalRunManager:
         resp = report_function(
             ml_run_id=self._ml_run.name,
             profiler_session_id=session_id,
-            gsc_file_path=self._ml_run.gcs_path + "/" + session_id,  # pyrefly: ignore[unsupported-operation]
+            gsc_file_path=profile_path,
             profiler_target=profiler_target,
             start_time=start_time,
             end_time=end_time,
@@ -631,6 +651,7 @@ class GlobalRunManager:
           return
 
         logger.exception("Failed to create profiler session")
+        self._ps_creation_start_time = None
         raise
       except Exception:
         logger.exception("Unexpected error reporting profiler session")
@@ -833,3 +854,11 @@ def get_last_updated_run() -> Optional[Dict[str, Any]]:
   """
   manager = get_global_run_manager()
   return manager.last_updated_run
+
+
+def get_profile_base_dir(mlrun: mlrun_types.MLRun) -> str:
+  """Returns the base profile directory for an MLRun."""
+  base_path = (mlrun.gcs_path or "").rstrip("/")
+  if mlrun.control_plane_url and mlrun.cluster_id:
+    return f"{base_path}/{mlrun.cluster_id}/{mlrun.name}"
+  return f"{base_path}/{mlrun.name}"
