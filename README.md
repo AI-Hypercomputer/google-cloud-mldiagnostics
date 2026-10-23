@@ -156,6 +156,12 @@ For workloads running in GKE, injection-webhook is needed to provide SDK needed
 metadata. It supports these common ML kubernetes workloads:
 JobSet/RayJob/LeaderWorkerSet.
 
+**Note:** If `mldiagnostics-injection-webhook` is not installed in your GKE
+cluster (or if your workload does not have the `managed-mldiagnostics-gke=true`
+label), you can pass GKE workload metadata directly to `machinelearning_run()`
+using the `workload_details` parameter (see
+[Creating a machine learning run](#creating-a-machine-learning-run)).
+
 #### Install cert-manager if not already installed
 Cert-manager is a prerequisite for the injection-webhook. If it’s not installed, follow this to install. After installing cert-manager, it may take up to two minutes for the certificate to become ready.
 
@@ -585,6 +591,44 @@ variable:
 machinelearning_run(
     # ...
     environment=os.environ.get("ENV", "env")
+)
+```
+
+`workload_details` Optional (supported for GKE workloads only). A dictionary of
+GKE workload metadata used when `mldiagnostics-injection-webhook` is not
+installed or enabled on the workload. Supported keys are:
+
+- `id` (**required**): Workload name (for example, the `JobSet` name).
+- `kind` (*optional*): Kubernetes workload kind (for example, `"JobSet"`,
+  `"Job"`, `"LeaderWorkerSet"`, or `"RayJob"`). Defaults to `"JobSet"`.
+- `namespace` (**required** unless running in-cluster): Kubernetes namespace of
+  the workload. In-cluster, falls back to
+  `/var/run/secrets/kubernetes.io/serviceaccount/namespace` or `POD_NAMESPACE`.
+- `cluster` (**required** unless running in-cluster): GKE cluster name or full
+  resource path (`projects/PROJECT/locations/LOCATION/clusters/CLUSTER`). Bare
+  cluster names are supported in-cluster only (where `cluster-location` is
+  resolved from GCE instance metadata); outside GKE, provide the full resource
+  path.
+- `parent_workload` (*optional*): Parent workload name.
+- `creation-timestamp` (*optional*): RFC 3339 workload creation timestamp.
+- `labels` (*optional*): Dictionary of string key-value workload labels.
+
+Example of creating a run on GKE without `mldiagnostics-injection-webhook`:
+
+```python
+run = machinelearning_run(
+    name="<run_name>",
+    run_group="<run_group>",
+    project="<some_project>",
+    region="<some_region>",
+    gcs_path="gs://<some_bucket>",
+    on_demand_xprof=True,
+    workload_details={
+        "id": "<jobset_name>",
+        "kind": "JobSet",
+        "namespace": "<k8s_namespace>",
+        "cluster": "<gke_cluster_name>",
+    },
 )
 ```
 

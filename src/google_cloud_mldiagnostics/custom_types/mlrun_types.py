@@ -76,6 +76,17 @@ class Orchestrator(str, enum.Enum):
   NONE = "NONE"
 
 
+ALLOWED_GKE_WORKLOAD_DETAIL_KEYS = frozenset({
+    "id",
+    "kind",
+    "cluster",
+    "namespace",
+    "parent_workload",
+    "creation-timestamp",
+    "labels",
+})
+
+
 class ConfigDict(dict):
   """A dictionary that supports both dict-style and attribute-style access."""
 

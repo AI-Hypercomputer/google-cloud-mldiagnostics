@@ -14,6 +14,7 @@
 
 """Module for creating and managing ML runs."""
 
+from collections.abc import Mapping
 import hashlib
 import logging
 import os
@@ -71,6 +72,49 @@ def normalize_gcs_path(gcs_path):
   return prefix + path_part
 
 
+_GKE_WORKLOAD_DETAIL_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9._/-]+$")
+_GKE_FILTERABLE_DETAIL_KEYS = (
+    "id",
+    "kind",
+    "namespace",
+    "cluster",
+    "parent_workload",
+)
+
+
+def _validate_workload_details(workload_details: Any) -> None:
+  """Validates user-supplied GKE workload_details at the public API boundary."""
+  if not isinstance(workload_details, Mapping):
+    raise exceptions.MLRunConfigurationError(
+        f"Invalid workload_details: {workload_details!r}. Expected dict."
+    )
+  unknown_keys = (
+      set(workload_details.keys())
+      - mlrun_types.ALLOWED_GKE_WORKLOAD_DETAIL_KEYS
+  )
+  if unknown_keys:
+    raise exceptions.MLRunConfigurationError(
+        "Unsupported keys in workload_details:"
+        f" {sorted(unknown_keys)}. Supported keys are:"
+        f" {sorted(mlrun_types.ALLOWED_GKE_WORKLOAD_DETAIL_KEYS)}."
+    )
+  for key in _GKE_FILTERABLE_DETAIL_KEYS:
+    val = workload_details.get(key)
+    if val is not None:
+      if not isinstance(
+          val, str
+      ) or not _GKE_WORKLOAD_DETAIL_VALUE_PATTERN.match(val):
+        raise exceptions.MLRunConfigurationError(
+            f"Invalid workload_details[{key!r}]: {val!r}. Expected a"
+            " non-empty string matching '^[A-Za-z0-9._/-]+$'."
+        )
+  labels = workload_details.get("labels")
+  if labels is not None and not isinstance(labels, Mapping):
+    raise exceptions.MLRunConfigurationError(
+        f"Invalid workload_details['labels']: {labels!r}. Expected dict."
+    )
+
+
 # Main SDK function - this is the primary interface users will import
 def machinelearning_run(
     name: str,
@@ -99,6 +143,7 @@ def machinelearning_run(
     rl_orchestrator: mlrun_types.RlOrchestrator | str = (
         mlrun_types.RlOrchestrator.NONE
     ),
+    workload_details: Mapping[str, Any] | None = None,
 ) -> mlrun_types.MLRun:
   """Create a new machine learning run.
 
@@ -137,6 +182,13 @@ def machinelearning_run(
         (e.g., MAXTEXT, AXLEARN, MAXDIFFUSION). Default is NONE.
       rl_orchestrator: The RL orchestrator used for the ML run (e.g., TUNIX).
         Default is NONE.
+      workload_details: Optional mapping of GKE workload metadata when running
+        without the GKE Diagon operator webhook (supported for GKE workloads
+        only). Required keys: 'id', plus 'cluster' and 'namespace' when not
+        auto-detected in-cluster ('kind' defaults to 'JobSet'). Optional keys:
+        'parent_workload', 'creation-timestamp', 'labels'. Bare cluster names
+        are supported in-cluster only; otherwise provide the full cluster
+        resource path.
 
   Returns:
       MLRun: A new ML run instance
@@ -166,6 +218,8 @@ def machinelearning_run(
     raise exceptions.MLRunConfigurationError(
         "environment must be one of 'autopush', 'staging', or 'prod'."
     )
+  if workload_details is not None:
+    _validate_workload_details(workload_details)
 
   if application_framework is None:
     application_framework = mlrun_types.ApplicationFramework.NONE
@@ -258,4 +312,5 @@ def machinelearning_run(
       ml_run_id=ml_run_id,
       workload_id=workload_id,
       namespace=namespace,
+      workload_details=workload_details,
   )

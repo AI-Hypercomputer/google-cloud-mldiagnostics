@@ -22,6 +22,7 @@ from typing import Any
 
 from google_cloud_mldiagnostics.core import global_manager
 from google_cloud_mldiagnostics.core import metrics
+from google_cloud_mldiagnostics.custom_types import exceptions
 from google_cloud_mldiagnostics.custom_types import metric_types
 from google_cloud_mldiagnostics.custom_types import mlrun_types
 from google_cloud_mldiagnostics.utils import config_utils
@@ -85,6 +86,7 @@ def initialize_mlrun(
     ml_run_id: str | None = None,
     workload_id: str | None = None,
     namespace: str | None = None,
+    workload_details: Mapping[str, Any] | None = None,
 ) -> mlrun_types.MLRun:
   """Initializes a new ML run.
 
@@ -118,6 +120,8 @@ def initialize_mlrun(
       ml_run_id: Optional deterministic ML run ID for self-hosted runs.
       workload_id: Optional workload identifier for self-hosted runs.
       namespace: Optional Kubernetes namespace for self-hosted runs.
+      workload_details: Optional user-injected dictionary of workload details
+        (e.g., GKE workload metadata such as id, kind, namespace, cluster).
 
   Returns:
       The initialized ML run object. It may be mutated (e.g., its name
@@ -159,14 +163,37 @@ def initialize_mlrun(
   created_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
   run_phase = mlrun_types.RunPhase.PHASE_ACTIVE
 
+  user_workload_details = workload_details
   if self_contained:
     orchestrator = mlrun_types.Orchestrator.NONE
     workload_details = {"id": workload_id}
   else:
     orchestrator = orchestrator_utils.detect_orchestrator()
-    workload_details = host_utils.get_workload_details(
-        orchestrator, run_workload_id=run_workload_id
-    )
+    if (
+        orchestrator == mlrun_types.Orchestrator.CUSTOM
+        and user_workload_details
+        and host_utils.is_gke_workload_details(user_workload_details)
+    ):
+      orchestrator = mlrun_types.Orchestrator.GKE
+    if user_workload_details is not None:
+      if orchestrator != mlrun_types.Orchestrator.GKE:
+        raise exceptions.MLRunConfigurationError(
+            "workload_details is only supported for GKE workloads and requires"
+            " non-empty 'id', 'cluster', and 'namespace' (when not"
+            " auto-detected in-cluster), but resolved orchestrator is"
+            f" {orchestrator}."
+        )
+      workload_details = host_utils.get_workload_details(
+          orchestrator,
+          run_workload_id=run_workload_id,
+          workload_details=user_workload_details,
+          project=project,
+          region=region,
+      )
+    else:
+      workload_details = host_utils.get_workload_details(
+          orchestrator, run_workload_id=run_workload_id
+      )
 
   # Generate display name and name for the MLRun.
   display_name = name
@@ -175,9 +202,11 @@ def initialize_mlrun(
       raise ValueError(
           "Detected GKE environment but GKE metadata is missing. This might"
           " be because environment variables 'GKE_DIAGON_IDENTIFIER' or"
-          " 'GKE_DIAGON_METADATA' are not set or are incomplete. Please"
+          " 'GKE_DIAGON_METADATA' are not set or are incomplete, or"
+          " 'workload_details' was not provided. Please"
           " ensure you are running SDK in a GKE environment with the GKE"
-          " diagon operator webhook enabled. For more details on GKE"
+          " diagon operator webhook enabled or pass 'workload_details' to"
+          " machinelearning_run(). For more details on GKE"
           " configuration, please see"
           " https://github.com/AI-Hypercomputer/google-cloud-mldiagnostics?tab=readme-ov-file#configure-gke-cluster."
       )
@@ -244,7 +273,9 @@ def initialize_mlrun(
 
   logging.info("MLRun '%s' created successfully.", ml_run.display_name)
   if not self_contained:
-    ml_diagnostics_url = create_diagnostics_url(region, project, sanitized_name)  # pyrefly: ignore[bad-argument-type]
+    ml_diagnostics_url = create_diagnostics_url(
+        region, project, ml_run.name  # pyrefly: ignore[bad-argument-type]
+    )
     xprof_url = create_xprof_url(ml_diagnostics_url)
     logging.info(
         "ML Diagnostics URL: %s : %s",
@@ -258,7 +289,7 @@ def initialize_mlrun(
     )
 
     if orchestrator == mlrun_types.Orchestrator.GKE:
-      gke_url = create_gke_url(region, project, sanitized_name)  # pyrefly: ignore[bad-argument-type]
+      gke_url = create_gke_url(region, project, ml_run.name)  # pyrefly: ignore[bad-argument-type]
       logging.info(
           "GKE detail view URL: %s : %s",
           ml_run.display_name,

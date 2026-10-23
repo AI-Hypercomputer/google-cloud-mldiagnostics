@@ -14,6 +14,7 @@
 
 """Utility functions for host- related checks."""
 
+from collections.abc import Mapping
 import datetime
 import hashlib
 import json
@@ -29,6 +30,69 @@ from google_cloud_mldiagnostics.utils import gcp
 import requests
 
 logger = logging.getLogger(__name__)
+
+_GKE_WORKLOAD_KIND_MAP = {
+    "job": "Job",
+    "jobset": "JobSet",
+    "leaderworkerset": "LeaderWorkerSet",
+    "lws": "LeaderWorkerSet",
+    "raycluster": "RayCluster",
+    "rayjob": "RayJob",
+    "deployment": "Deployment",
+    "statefulset": "StatefulSet",
+}
+
+
+_K8S_NAMESPACE_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
+_USER_INJECTED_GKE_DETAILS_KEY = "_user_injected"
+
+
+def _get_in_cluster_namespace() -> str:
+  """Returns the Kubernetes namespace from serviceaccount secret or env var."""
+  try:
+    if os.path.exists(_K8S_NAMESPACE_PATH):
+      with open(_K8S_NAMESPACE_PATH, encoding="utf-8") as f:
+        ns = f.read().strip()
+      if ns:
+        return ns
+  except OSError:
+    pass
+  return os.environ.get("POD_NAMESPACE", "").strip()
+
+
+def find_profiler_target(
+    workload_details: Mapping[str, Any] | None, hostname: str
+) -> str | None:
+  """Finds the profiler target displayName matching `hostname`."""
+  if not hostname:
+    return None
+  for target in (workload_details or {}).get("targets") or []:
+    # In GKE, hostname is the pod name (or pod name prefix on Indexed JobSet).
+    # In Slurm / Other orchestrators, hostname is the instance name.
+    if target.get("hostname", "") == hostname or target.get(
+        "displayName", ""
+    ).startswith(hostname):
+      return target.get("displayName", None)
+  return None
+
+
+def is_gke_workload_details(
+    workload_details: Mapping[str, Any] | None,
+) -> bool:
+  """Returns True if workload_details contains required GKE workload fields."""
+  if not isinstance(workload_details, Mapping):
+    return False
+  has_id = bool(workload_details.get("id"))
+  has_namespace = bool(
+      workload_details.get("namespace") or _get_in_cluster_namespace()
+  )
+  if not (has_id and has_namespace):
+    return False
+  if workload_details.get("cluster"):
+    return True
+  if os.getenv("KUBERNETES_SERVICE_HOST"):
+    return bool(gcp.get_instance_attribute("cluster-name", timeout=1))
+  return False
 
 
 # GKE related functions
@@ -66,32 +130,121 @@ def _get_gke_diagon_metadata() -> dict[str, Any] | None:
     return None
 
 
-def _get_gke_workload_details() -> dict[str, Any] | None:
+def _parse_gke_labels(labels_str: str | None) -> dict[str, str] | None:
+  """Parses comma-separated key=value label strings from GKE metadata."""
+  if not labels_str:
+    return None
+  gke_labels: dict[str, str] = {}
+  for pair in labels_str.split(","):
+    if "=" in pair:
+      key, value = pair.split("=", 1)
+      gke_labels[key.strip()] = value.strip()
+  return gke_labels
+
+
+def _resolve_gke_cluster(
+    current_cluster: str,
+    workload_details: Mapping[str, Any],
+    project: str | None,
+    region: str | None,
+) -> str:
+  """Resolves and normalizes a GKE cluster resource path."""
+  raw_cluster = workload_details.get("cluster")
+  if raw_cluster:
+    cluster = str(raw_cluster)
+  elif not current_cluster and os.getenv("KUBERNETES_SERVICE_HOST"):
+    cluster = gcp.get_instance_attribute("cluster-name", timeout=1) or ""
+  else:
+    cluster = current_cluster
+
+  if not cluster or "/" in cluster:
+    return cluster
+
+  cluster_location = None
+  if os.getenv("KUBERNETES_SERVICE_HOST"):
+    cluster_location = gcp.get_instance_attribute("cluster-location", timeout=1)
+  if not cluster_location:
+    cluster_location = region
+  if not cluster_location:
+    return cluster
+
+  if project:
+    return f"projects/{project}/locations/{cluster_location}/clusters/{cluster}"
+  return f"locations/{cluster_location}/clusters/{cluster}"
+
+
+def _apply_user_gke_workload_details(
+    details: dict[str, Any],
+    workload_details: Mapping[str, Any],
+    project: str | None,
+    region: str | None,
+) -> None:
+  """Merges user-supplied GKE workload metadata into `details` in-place."""
+  details[_USER_INJECTED_GKE_DETAILS_KEY] = True
+
+  workload_id = workload_details.get("id")
+  if workload_id:
+    details["id"] = str(workload_id)
+
+  raw_kind = workload_details.get("kind")
+  if raw_kind:
+    kind_str = str(raw_kind)
+    details["kind"] = _GKE_WORKLOAD_KIND_MAP.get(kind_str.lower(), kind_str)
+  elif not details["kind"]:
+    details["kind"] = "JobSet"
+
+  details["cluster"] = _resolve_gke_cluster(
+      details["cluster"], workload_details, project, region
+  )
+
+  raw_namespace = workload_details.get("namespace")
+  if raw_namespace:
+    details["namespace"] = str(raw_namespace)
+  elif not details["namespace"]:
+    details["namespace"] = _get_in_cluster_namespace()
+
+  raw_parent = workload_details.get("parent_workload")
+  if raw_parent:
+    details["parent_workload"] = str(raw_parent)
+  elif "parent_workload" in workload_details:
+    details["parent_workload"] = None
+
+  raw_timestamp = workload_details.get("creation-timestamp")
+  if raw_timestamp:
+    details["creation-timestamp"] = str(raw_timestamp)
+
+  raw_labels = workload_details.get("labels")
+  if isinstance(raw_labels, Mapping):
+    merged_labels = dict(details["labels"] or {})
+    merged_labels.update({str(k): str(v) for k, v in raw_labels.items()})
+    details["labels"] = merged_labels
+
+
+def _get_gke_workload_details(
+    workload_details: Mapping[str, Any] | None = None,
+    project: str | None = None,
+    region: str | None = None,
+) -> dict[str, Any] | None:
   """Returns workload details if available, otherwise None."""
   identifier = _get_gke_diagon_identifier() or {}
   metadata = _get_gke_diagon_metadata() or {}
 
-  details = {
+  details: dict[str, Any] = {
       "id": identifier.get("metadata.name", ""),
       "kind": identifier.get("metadata.kind", ""),
       "cluster": identifier.get("clustername", ""),
       "namespace": identifier.get("namespace", ""),
       "parent_workload": metadata.get("parent-workload", None),
       "creation-timestamp": metadata.get("creation-timestamp", ""),
+      "labels": _parse_gke_labels(metadata.get("associated-labels", None)),
   }
-  # Parse labels from metadata.
-  labels_str = metadata.get("associated-labels", None)
-  if labels_str:
-    gke_labels = {}
-    for pair in labels_str.split(","):
-      if "=" in pair:
-        key, value = pair.split("=", 1)
-        gke_labels[key.strip()] = value.strip()
-    details["labels"] = gke_labels
-  else:
-    details["labels"] = None
 
-  if all(not v for v in details.values()):
+  if workload_details:
+    _apply_user_gke_workload_details(details, workload_details, project, region)
+
+  if all(
+      not v for k, v in details.items() if k != _USER_INJECTED_GKE_DETAILS_KEY
+  ):
     return None
 
   return details
@@ -171,9 +324,7 @@ def _get_slurm_workload_details() -> dict[str, Any] | None:
   if not job_id or not cluster_name:
     return None
 
-  cluster_path = (
-      f"projects/{gcp.get_project_id()}/locations/{gcp.get_instance_zone()}/clusters/{cluster_name}"
-  )
+  cluster_path = f"projects/{gcp.get_project_id()}/locations/{gcp.get_instance_zone()}/clusters/{cluster_name}"
 
   job_name = os.getenv("SLURM_JOB_NAME")
   display_name = job_name if job_name else f"slurm-job-{job_id}"
@@ -213,6 +364,20 @@ def _get_sha256_hash(input_string: str) -> str:
   return hex_digest
 
 
+def _format_iso_timestamp_for_id(raw_timestamp: str) -> str:
+  """Formats an ISO-8601 timestamp string into UTC YYYYMMDD-HHMMSS."""
+  iso_str = (
+      f"{raw_timestamp[:-1]}+00:00"
+      if raw_timestamp.endswith("Z")
+      else raw_timestamp
+  )
+  return (
+      datetime.datetime.fromisoformat(iso_str)
+      .astimezone(datetime.timezone.utc)
+      .strftime("%Y%m%d-%H%M%S")
+  )
+
+
 def _gke_run_identifier(workload_details: dict[str, Any]) -> str:
   """Returns the unique identifier for the gke workload.
 
@@ -235,49 +400,43 @@ def _gke_run_identifier(workload_details: dict[str, Any]) -> str:
         " with the GKE diagon operator webhook enabled."
     )
 
+  user_injected = bool(workload_details.get(_USER_INJECTED_GKE_DETAILS_KEY))
   identifier_keys = ["namespace", "cluster", "kind", "id"]
-  metadata_keys = ["creation-timestamp"]
-  missed_identifier_keys = []
-  missed_metadata_keys = []
-  for key in identifier_keys:
-    if not workload_details.get(key):
-      missed_identifier_keys.append(key)
-  for key in metadata_keys:
-    if not workload_details.get(key):
-      missed_metadata_keys.append(key)
+  if not user_injected:
+    identifier_keys.append("creation-timestamp")
+  missed_identifier_keys = [
+      key for key in identifier_keys if not workload_details.get(key)
+  ]
 
-  if missed_identifier_keys or missed_metadata_keys:
-    missing_keys_str = ", ".join(missed_identifier_keys + missed_metadata_keys)
-    error_message = (
-        "Could not generate GKE workload identifier due to missing"
-        f" properties: {missing_keys_str}."
-    )
-    if missed_identifier_keys:
-      error_message += (
+  if missed_identifier_keys:
+    missing_keys_str = ", ".join(missed_identifier_keys)
+    if user_injected:
+      error_message = (
+          "Could not generate GKE workload identifier due to missing"
+          f" properties: {missing_keys_str}."
+          " Please check if 'workload_details' or 'GKE_DIAGON_IDENTIFIER'"
+          " environment variable is set correctly."
+      )
+    else:
+      error_message = (
+          "Could not generate GKE workload identifier due to missing"
+          f" properties: {missing_keys_str}."
           " Please check if 'GKE_DIAGON_IDENTIFIER' environment variable is"
           " set correctly."
+          " Ensure you are running SDK in a GKE environment with the GKE diagon"
+          " operator webhook enabled."
       )
-    if missed_metadata_keys:
-      error_message += (
-          " Please check if 'GKE_DIAGON_METADATA' environment variable is set"
-          " correctly."
-      )
-    error_message += (
-        " Ensure you are running SDK in a GKE environment with the GKE diagon"
-        " operator webhook enabled."
-    )
     raise ValueError(error_message)
 
   # Preprocess cluster name and timestamp.
   cluster = workload_details["cluster"].split("/")[-1]
-  transformed_timestamp = workload_details["creation-timestamp"]
-  transformed_timestamp = transformed_timestamp[:-1] + "+00:00"
-  transformed_timestamp = (
-      datetime.datetime.fromisoformat(transformed_timestamp)
-      .astimezone(datetime.timezone.utc)
-      .strftime("%Y%m%d-%H%M%S")
-  )
-
+  raw_timestamp = workload_details.get("creation-timestamp")
+  if raw_timestamp:
+    transformed_timestamp = _format_iso_timestamp_for_id(raw_timestamp)
+  else:
+    transformed_timestamp = datetime.datetime.now(
+        datetime.timezone.utc
+    ).strftime("%Y%m%d-%H%M%S-%f")
   identifier = (
       f"{cluster}"
       f"_{workload_details['namespace']}"
@@ -301,8 +460,8 @@ def _custom_run_identifier(workload_details: dict[str, Any]) -> str:
   missing_keys = [k for k in required_keys if not workload_details.get(k)]
   if missing_keys:
     raise ValueError(
-        "Could not generate CUSTOM workload identifier due to missing properties:"
-        f" {', '.join(missing_keys)}."
+        "Could not generate CUSTOM workload identifier due to missing"
+        f" properties: {', '.join(missing_keys)}."
     )
   identifier = f"{workload_details['id']}_{workload_details['create_time']}"
   return _get_sha256_hash(identifier)
@@ -324,16 +483,8 @@ def _slurm_run_identifier(workload_details: dict[str, Any]) -> str:
     )
 
   cluster = workload_details["cluster"].split("/")[-1]
-  raw_submit_time = workload_details["submit_time"]
-  iso_str = (
-      raw_submit_time.replace("Z", "+00:00")
-      if raw_submit_time.endswith("Z")
-      else raw_submit_time
-  )
-  transformed_timestamp = (
-      datetime.datetime.fromisoformat(iso_str)
-      .astimezone(datetime.timezone.utc)
-      .strftime("%Y%m%d-%H%M%S")
+  transformed_timestamp = _format_iso_timestamp_for_id(
+      workload_details["submit_time"]
   )
   identifier = f"{cluster}_{workload_details['job_id']}_{transformed_timestamp}"
   return _get_sha256_hash(identifier)
@@ -479,17 +630,14 @@ def get_accelerator_type(
       or os.environ.get("PJRT_DEVICE", "").upper() == "TPU"
   ):
     return metric_types.AcceleratorType.TPU
-  if (
-      any(
-          var in os.environ
-          for var in [
-              "CUDA_VISIBLE_DEVICES",
-              "NVIDIA_VISIBLE_DEVICES",
-              "CUDA_VERSION",
-          ]
-      )
-      or os.environ.get("PJRT_DEVICE", "").upper() in ("GPU", "CUDA")
-  ):
+  if any(
+      var in os.environ
+      for var in [
+          "CUDA_VISIBLE_DEVICES",
+          "NVIDIA_VISIBLE_DEVICES",
+          "CUDA_VERSION",
+      ]
+  ) or os.environ.get("PJRT_DEVICE", "").upper() in ("GPU", "CUDA"):
     return metric_types.AcceleratorType.GPU
 
   # 3. Check device nodes & libraries
@@ -552,7 +700,11 @@ def is_local_master_process(
 
 
 def get_workload_details(
-    orchestrator: str = "GKE", run_workload_id: str | None = None
+    orchestrator: str = "GKE",
+    run_workload_id: str | None = None,
+    workload_details: Mapping[str, Any] | None = None,
+    project: str | None = None,
+    region: str | None = None,
 ) -> dict[str, Any] | None:
   """Returns workload details if available, otherwise None."""
   if orchestrator == mlrun_types.Orchestrator.SLURM:
@@ -561,7 +713,11 @@ def get_workload_details(
   if orchestrator == mlrun_types.Orchestrator.CUSTOM:
     return _get_custom_workload_details(run_workload_id)
 
-  return _get_gke_workload_details()
+  return _get_gke_workload_details(
+      workload_details=workload_details,
+      project=project,
+      region=region,
+  )
 
 
 def get_identifier(

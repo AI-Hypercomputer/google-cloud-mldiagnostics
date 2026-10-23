@@ -15,6 +15,7 @@
 """Client for sending requests to Diagon Control Plane."""
 
 import ast
+from collections.abc import Mapping
 import copy
 import datetime
 import logging
@@ -34,14 +35,51 @@ logger = logging.getLogger(__name__)
 _MAX_RETRIES = 3
 _ERROR_CODE_ALREADY_EXISTS = 6
 _CLOUD_PLATFORM_SCOPE = "https://www.googleapis.com/auth/cloud-platform"
+_GKE_RESOLVE_MAX_ATTEMPTS = 8
+_GKE_RESOLVE_INITIAL_DELAY_SEC = 1.0
+_GKE_RESOLVE_BASE_DELAY_SEC = 1.0
+_GKE_RESOLVE_MAX_DELAY_SEC = 16.0
+
+
+def _escape_filter_value(value: Any) -> str:
+  """Escapes backslashes and double quotes for AIP-160 filter literals."""
+  return str(value).replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _build_gke_active_run_filter(
+    workload_details: Mapping[str, Any] | None,
+) -> Optional[str]:
+  """Builds a ListMachineLearningRuns filter for an active GKE workload."""
+  if not isinstance(workload_details, Mapping):
+    return None
+  workload_id = workload_details.get("id")
+  kind = workload_details.get("kind")
+  namespace = workload_details.get("namespace")
+  cluster = workload_details.get("cluster")
+  if not (workload_id and kind and namespace and cluster):
+    return None
+  # Note: `workload_details.gke.cluster_name` (added in cl/995815673) is
+  # matched client-side in `_list_active_gke_ml_run` until that derived filter
+  # field is rolled out across all CLH environments.
+  clauses = [
+      'run_phase = "ACTIVE"',
+      f'workload_details.gke.id = "{_escape_filter_value(workload_id)}"',
+      f'workload_details.gke.kind = "{_escape_filter_value(kind)}"',
+      f'workload_details.gke.namespace = "{_escape_filter_value(namespace)}"',
+  ]
+  parent_workload = workload_details.get("parent_workload")
+  if parent_workload:
+    escaped_parent = _escape_filter_value(parent_workload)
+    clauses.append(f'workload_details.gke.parent_workload = "{escaped_parent}"')
+  return " AND ".join(clauses)
 
 
 def _extract_run_id_from_error(err: Exception) -> Optional[str]:
   """Extract the existing run ID from HTTPError.
 
-  This function parses the string representation of an HTTPError to find a
-  previously created run ID when a resource already exists error (code 6) is
-  returned by the API.
+  This function parses the string representation or HTTP response of an
+  HTTPError to find a previously created run ID when a resource already exists
+  error (code 6) is returned by the API.
 
   Args:
     err: The exception raised, typically a requests.exceptions.HTTPError.
@@ -49,6 +87,25 @@ def _extract_run_id_from_error(err: Exception) -> Optional[str]:
   Returns:
     The extracted run ID as a string if found, otherwise None.
   """
+  try:
+    response = getattr(err, "response", None)
+    if response is not None and getattr(response, "status_code", None) == 409:
+      resp_json = response.json()
+      if isinstance(resp_json, dict):
+        err_obj = resp_json.get("error", resp_json)
+        if isinstance(err_obj, dict):
+          for detail in err_obj.get("details", []):
+            if (
+                isinstance(detail, dict)
+                and detail.get("@type")
+                == "type.googleapis.com/google.rpc.ResourceInfo"
+            ):
+              resource_name = detail.get("resourceName")
+              if resource_name:
+                return resource_name.strip("/").split("/")[-1]
+  except Exception as e:  # pylint: disable=broad-exception-caught
+    logger.debug("Failed to extract run ID from HTTP response: %s", e)
+
   try:
     err_str = str(err)
     if "failed: {" in err_str:
@@ -62,7 +119,7 @@ def _extract_run_id_from_error(err: Exception) -> Optional[str]:
           ):
             resource_name = detail.get("resourceName")
             if resource_name:
-              return resource_name.split("/")[-1]
+              return resource_name.strip("/").split("/")[-1]
   except Exception as e:
     logger.debug("Failed to extract run ID from error string: %s", e)
   return None
@@ -289,11 +346,11 @@ class ControlPlaneClient:
             "cluster": workload_details["cluster"],
             "namespace": workload_details["namespace"],
         }
-        if workload_details["parent_workload"]:
+        if workload_details.get("parent_workload"):
           gke_workload_details["parentWorkload"] = workload_details[
               "parent_workload"
           ]
-        if workload_details["labels"]:
+        if workload_details.get("labels"):
           gke_workload_details["labels"] = workload_details["labels"]
         creation_timestamp = workload_details.get("creation-timestamp")
         if creation_timestamp:
@@ -338,49 +395,53 @@ class ControlPlaneClient:
         json=payload,
     )
 
+    post_failed = False
     try:
+      post_failed = True
       response.raise_for_status()
-    except requests.exceptions.HTTPError:
-      logger.error(
-          "Create ML Run request failed: status_code=%s, content=%s",
-          response.status_code,
-          response.text,
+      post_failed = False
+
+      json_response = response.json()
+      if logger.isEnabledFor(logging.DEBUG):
+        logger.debug(
+            "Create ML Run response: %s", pprint.pformat(json_response)
+        )
+
+      operation = (
+          self._wait_for_operation(json_response["name"])
+          if not json_response.get("done")
+          else json_response
       )
+
+      if logger.isEnabledFor(logging.INFO):
+        logger.info("Create ML Run operation: %s", pprint.pformat(operation))
+
+      if operation.get("error"):
+        raise requests.exceptions.HTTPError(
+            f"Operation {operation['name']!r} failed: {operation['error']!r}"
+        )
+    except requests.exceptions.HTTPError as err_http:
+      existing_run_id = _extract_run_id_from_error(err_http)
+      if existing_run_id:
+        return self._recover_existing_ml_run(
+            existing_run_id,
+            display_name=display_name,
+            run_phase=run_phase,
+            run_group=run_group,
+            tools=tools,
+            artifacts=artifacts,
+            labels=labels,
+            configs=configs,
+            orchestrator=orchestrator,
+            workload_targets=workload_targets,
+        )
+      if post_failed:
+        logger.error(
+            "Create ML Run request failed: status_code=%s, content=%s",
+            response.status_code,
+            response.text,
+        )
       raise
-    json_response = response.json()
-    if logger.isEnabledFor(logging.DEBUG):
-      logger.debug("Create ML Run response: %s", pprint.pformat(json_response))
-
-    if not json_response.get("done"):
-      try:
-        operation = self._wait_for_operation(json_response["name"])
-      except requests.exceptions.HTTPError as e_op:
-        existing_run_id = _extract_run_id_from_error(e_op)
-        if existing_run_id:
-          logger.info(
-              "ML run already exists. Recovering run ID %r.", existing_run_id
-          )
-          return self.update_ml_run(
-              name=existing_run_id,
-              display_name=display_name,
-              tools=tools,
-              artifacts=artifacts,
-              run_phase=run_phase,
-              labels=labels,
-              configs=configs,
-              workload_targets=workload_targets,
-          )
-        raise
-    else:
-      operation = json_response
-
-    if logger.isEnabledFor(logging.INFO):
-      logger.info("Create ML Run operation: %s", pprint.pformat(operation))
-
-    if operation.get("error"):
-      raise requests.exceptions.HTTPError(
-          f"Operation {operation['name']!r} failed: {operation['error']!r}"
-      )
 
     if operation.get("response"):
       result = operation["response"]
@@ -667,6 +728,217 @@ class ControlPlaneClient:
     self.last_updated_run = sanitized_response
     return sanitized_response
 
+  def _has_matching_gke_target(
+      self, run: Mapping[str, Any], hostname: Optional[str]
+  ) -> bool:
+    """Returns True if `run` has populated targets matching `hostname`."""
+    workload_details = run.get("workloadDetails")
+    if not isinstance(workload_details, Mapping):
+      return False
+    targets = workload_details.get("targets")
+    if not targets:
+      return False
+    if not hostname:
+      return True
+    return (
+        host_utils.find_profiler_target(workload_details, hostname) is not None
+    )
+
+  def resolve_active_gke_ml_run(
+      self,
+      workload_details: Mapping[str, Any] | None,
+      *,
+      hostname: Optional[str] = None,
+      max_attempts: int = _GKE_RESOLVE_MAX_ATTEMPTS,
+      initial_delay_sec: float = _GKE_RESOLVE_INITIAL_DELAY_SEC,
+      base_delay_sec: float = _GKE_RESOLVE_BASE_DELAY_SEC,
+      max_delay_sec: float = _GKE_RESOLVE_MAX_DELAY_SEC,
+  ) -> Optional[Dict[str, Any]]:
+    """Resolves an active GKE ML run using read-only queries with backoff.
+
+    Polls ListMachineLearningRuns and GetMachineLearningRun with exponential
+    backoff and random jitter so worker processes synchronize the canonical
+    run ID and enriched targets without mutating control plane state.
+
+    Args:
+        workload_details: GKE workload details dictionary, or None.
+        hostname: Optional local pod/instance hostname used to verify that the
+          resolved run's targets belong to the current workload incarnation.
+        max_attempts: Maximum number of polling attempts.
+        initial_delay_sec: Initial jittered delay before the first poll attempt.
+        base_delay_sec: Base backoff delay in seconds between attempts.
+        max_delay_sec: Maximum backoff delay in seconds between attempts.
+
+    Returns:
+        The resolved ML run dictionary if found, or None if not found or if
+        required workload filter fields are missing.
+    """
+    filter_str = _build_gke_active_run_filter(workload_details)
+    if not filter_str or not isinstance(workload_details, Mapping):
+      return None
+    cluster_name = str(workload_details.get("cluster", "")).split("/")[-1]
+
+    if initial_delay_sec > 0:
+      time.sleep(initial_delay_sec * (0.25 + 0.75 * random.random()))
+
+    delay = base_delay_sec
+    resolved_run: Optional[Dict[str, Any]] = None
+    resolved_run_id: Optional[str] = None
+
+    for attempt in range(max_attempts):
+      candidate: Optional[Dict[str, Any]] = None
+      try:
+        candidate = self._list_active_gke_ml_run(filter_str, cluster_name)
+      except requests.exceptions.RequestException as e:
+        logger.warning(
+            "Transient error listing active GKE ML run (attempt %d/%d): %s",
+            attempt + 1,
+            max_attempts,
+            e,
+        )
+
+      if candidate is not None:
+        resolved_run = candidate
+        run_name = candidate.get("name", "")
+        resolved_run_id = (
+            run_name.strip("/").split("/")[-1]
+            if isinstance(run_name, str) and run_name.strip()
+            else None
+        )
+        if self._has_matching_gke_target(resolved_run, hostname):
+          return resolved_run
+        if resolved_run_id and not resolved_run.get("workloadDetails", {}).get(
+            "targets"
+        ):
+          try:
+            resolved_run = self.get_ml_run(resolved_run_id)
+            if self._has_matching_gke_target(resolved_run, hostname):
+              return resolved_run
+          except requests.exceptions.RequestException as e:
+            logger.warning(
+                "Transient error fetching GKE ML run %r (attempt %d/%d): %s",
+                resolved_run_id,
+                attempt + 1,
+                max_attempts,
+                e,
+            )
+
+      if attempt < max_attempts - 1:
+        time.sleep(delay * (0.25 + 0.75 * random.random()))
+        delay = min(delay * 2, max_delay_sec)
+
+    if resolved_run is not None:
+      targets = resolved_run.get("workloadDetails", {}).get("targets")
+      if targets and hostname:
+        logger.warning(
+            "Active GKE ML run %r targets did not match local hostname %r"
+            " after %s attempts; ignoring stale run.",
+            resolved_run_id,
+            hostname,
+            max_attempts,
+        )
+        return None
+      logger.warning(
+          "GKE workload targets for ML run %r are not yet populated; targets"
+          " will be refreshed lazily when creating a profiler session.",
+          resolved_run_id,
+      )
+      return resolved_run
+
+    logger.warning(
+        "Could not resolve active GKE ML run from control plane after %s"
+        " attempts; proceeding with local run ID.",
+        max_attempts,
+    )
+    return None
+
+  def _list_active_gke_ml_run(
+      self, filter_str: str, cluster_name: str
+  ) -> Optional[Dict[str, Any]]:
+    """Queries ListMachineLearningRuns for the most recent active GKE run."""
+    params = {
+        "filter": filter_str,
+        "order_by": "create_time desc",
+        "page_size": 5,
+    }
+    logger.debug(
+        "List ML Runs request: url=%s, params=%s", self.ml_runs_path, params
+    )
+    response = requests.get(
+        self.ml_runs_path,
+        headers=self._get_headers(),
+        params=params,
+    )
+    response.raise_for_status()
+    json_response = response.json()
+    runs = (
+        json_response.get("machineLearningRuns")
+        if isinstance(json_response, dict)
+        else None
+    )
+    if isinstance(runs, list):
+      for run in runs:
+        if not isinstance(run, dict):
+          continue
+        gke_cluster = (
+            (run.get("workloadDetails") or {}).get("gke", {}).get("cluster", "")
+        )
+        if (
+            cluster_name
+            and gke_cluster
+            and str(gke_cluster).split("/")[-1] != cluster_name
+        ):
+          continue
+        sanitized = self._sanitize_ml_run_dict(run)
+        self.last_updated_run = sanitized
+        return sanitized
+    return None
+
+  def _recover_existing_ml_run(
+      self,
+      existing_run_id: str,
+      *,
+      display_name: str,
+      run_phase: str,
+      run_group: str | None = None,
+      tools: list[dict[str, Any]] | None = None,
+      artifacts: dict[str, str] | None = None,
+      labels: dict[str, str] | None = None,
+      configs: dict[str, Any] | None = None,
+      orchestrator: str | None = None,
+      workload_targets: list[dict[str, Any]] | None = None,
+  ) -> dict[str, Any]:
+    """Recovers an existing ML run on ALREADY_EXISTS conflict."""
+    logger.info("ML run already exists. Recovering run ID %r.", existing_run_id)
+    update_mask = (
+        "*,workload_details"
+        if orchestrator == mlrun_types.Orchestrator.GKE
+        else "*"
+    )
+    try:
+      return self.update_ml_run(
+          name=existing_run_id,
+          display_name=display_name,
+          run_group=run_group,
+          tools=tools,
+          artifacts=artifacts,
+          run_phase=run_phase,
+          labels=labels,
+          configs=configs,
+          workload_targets=workload_targets,
+          update_mask=update_mask,
+      )
+    except requests.exceptions.RequestException as e:
+      if orchestrator == mlrun_types.Orchestrator.GKE:
+        logger.warning(
+            "Failed to update recovered GKE ML run %r (falling back to"
+            " get_ml_run): %s",
+            existing_run_id,
+            e,
+        )
+        return self.get_ml_run(existing_run_id)
+      raise
+
   def update_ml_run(
       self,
       name: str,
@@ -674,6 +946,7 @@ class ControlPlaneClient:
       run_phase: Optional[str] = None,
       *,
       display_name: Optional[str] = None,
+      run_group: Optional[str] = None,
       tools: Optional[List[Dict[str, Any]]] = None,
       artifacts: Optional[Dict[str, str]] = None,
       labels: Optional[Dict[str, str]] = None,
@@ -691,6 +964,7 @@ class ControlPlaneClient:
         force: If True, forces an update even if no fields have changed.
         run_phase: Phase of the run (ACTIVE, COMPLETE, FAILED)
         display_name: Optional new display name for the run
+        run_group: Optional run group / runSet identifier for the run
         tools: Optional new list of tools to enable (e.g., XProf, NSys)
         artifacts: Optional new artifacts configuration (e.g., gcsPath)
         labels: Optional new dictionary of labels to merge
@@ -712,6 +986,7 @@ class ControlPlaneClient:
             force,
             run_phase,
             display_name=display_name,
+            run_group=run_group,
             tools=tools,
             artifacts=artifacts,
             labels=labels,
@@ -748,6 +1023,7 @@ class ControlPlaneClient:
       run_phase: Optional[str] = None,
       *,
       display_name: Optional[str] = None,
+      run_group: Optional[str] = None,
       tools: Optional[List[Dict[str, Any]]] = None,
       artifacts: Optional[Dict[str, str]] = None,
       labels: Optional[Dict[str, str]] = None,
@@ -766,8 +1042,20 @@ class ControlPlaneClient:
       payload = self.get_ml_run(name)
     need_update = force
 
+    # When adopting a run pre-created by the GKE operator / XMON (created_by !=
+    # "diagon_sdk"), enrich the user-supplied displayName and runSet/runGroup
+    # while preserving original provenance labels ("created_by",
+    # "create-tool-mode") below.
     if display_name is not None and payload.get("displayName") != display_name:
       payload["displayName"] = display_name
+      need_update = True
+
+    if run_group and (
+        payload.get("runSet") != run_group
+        or payload.get("runGroup") != run_group
+    ):
+      payload["runSet"] = run_group
+      payload["runGroup"] = run_group
       need_update = True
 
     if run_phase is not None and payload.get("runPhase") != run_phase:
@@ -863,6 +1151,16 @@ class ControlPlaneClient:
         workload_details["targets"] = existing_targets
         payload["workloadDetails"] = workload_details
         need_update = True
+
+    # Backend contract: UpdateMachineLearningRun with "workload_details" in
+    # update_mask re-runs GKE target enrichment (enrichGKEWorkloadDetails) on
+    # ACTIVE GKE runs. Force the PATCH when targets are not yet populated.
+    if (
+        "workload_details" in update_mask.split(",")
+        and payload.get("orchestrator") == mlrun_types.Orchestrator.GKE
+        and not payload.get("workloadDetails", {}).get("targets")
+    ):
+      need_update = True
 
     if not need_update:
       return self._sanitize_ml_run_dict(payload)

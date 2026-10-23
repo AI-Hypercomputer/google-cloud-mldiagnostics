@@ -14,6 +14,7 @@
 
 """Module for managing global state."""
 
+from collections.abc import Mapping
 import logging
 import threading
 import time
@@ -32,6 +33,65 @@ from google_cloud_mldiagnostics.utils import host_utils
 import requests
 
 logger = logging.getLogger(__name__)
+
+_GKE_RESPONSE_FIELD_MAP = (
+    ("id", "id"),
+    ("kind", "kind"),
+    ("cluster", "cluster"),
+    ("namespace", "namespace"),
+    ("createTime", "creation-timestamp"),
+)
+
+
+def _should_sync_gke_run_on_worker(
+    mlrun: mlrun_types.MLRun, self_contained: bool
+) -> bool:
+  """Returns True if a non-master GKE worker host must sync its canonical run ID."""
+  return (
+      not self_contained
+      and mlrun.orchestrator == mlrun_types.Orchestrator.GKE
+      and host_utils.is_local_master_process(mlrun.framework)
+      and isinstance(mlrun.workload_details, dict)
+      and "creation-timestamp" in mlrun.workload_details
+      and not mlrun.workload_details.get("creation-timestamp")
+  )
+
+
+def _merge_workload_details_from_response(
+    existing_details: Mapping[str, Any] | None,
+    resp_workload_details: Mapping[str, Any],
+) -> dict[str, Any]:
+  """Merges control-plane workloadDetails into local MLRun state.
+
+  Preserves both the nested control-plane fields (`gke`, `targets`) and the
+  flattened local GKE fields (`id`, `kind`, `cluster`, `namespace`,
+  `creation-timestamp`, `parent_workload`, `labels`).
+
+  Args:
+    existing_details: Existing local workload details dictionary.
+    resp_workload_details: Workload details dictionary from the control-plane
+      response.
+
+  Returns:
+    Merged workload details dictionary.
+  """
+  merged = (
+      dict(existing_details) if isinstance(existing_details, Mapping) else {}
+  )
+  merged.update(resp_workload_details)
+  gke_details = resp_workload_details.get("gke")
+  if isinstance(gke_details, Mapping):
+    for resp_key, local_key in _GKE_RESPONSE_FIELD_MAP:
+      if gke_details.get(resp_key):
+        merged[local_key] = gke_details[resp_key]
+    if "parentWorkload" in gke_details:
+      merged["parent_workload"] = gke_details.get("parentWorkload") or None
+    if "labels" in gke_details:
+      merged["labels"] = gke_details.get("labels")
+  return merged
+
+
+_find_profiler_target = host_utils.find_profiler_target
 
 
 class GlobalRunManager:
@@ -146,6 +206,8 @@ class GlobalRunManager:
             mlrun.name,
         )
         is_master = False
+        if _should_sync_gke_run_on_worker(mlrun, self_contained):
+          self._sync_gke_run_from_control_plane(mlrun)
       else:
         self._create_ml_run_on_control_plane(mlrun)
 
@@ -343,18 +405,44 @@ class GlobalRunManager:
     Args:
         response: The response dictionary from the control plane API.
     """
-    if isinstance(response, dict):
-      if self._ml_run is not None:
-        resp_name = response.get("name")
-        if isinstance(resp_name, str) and resp_name.strip():
-          resp_id = resp_name.strip("/").split("/")[-1]
-          if resp_id:
-            self._ml_run.name = resp_id
-            if bool(self._ml_run.control_plane_url):
-              self._ml_run.ml_run_id = resp_id
-            self._sync_exporters_run_id(resp_id)
-        if bool(self._ml_run.control_plane_url) and response.get("clusterId"):
-          self._ml_run.cluster_id = response["clusterId"]
+    if not isinstance(response, dict) or self._ml_run is None:
+      return
+
+    resp_name = response.get("name")
+    if isinstance(resp_name, str) and resp_name.strip():
+      resp_id = resp_name.strip("/").split("/")[-1]
+      if resp_id:
+        self._ml_run.name = resp_id
+        if bool(self._ml_run.control_plane_url):
+          self._ml_run.ml_run_id = resp_id
+        self._sync_exporters_run_id(resp_id)
+
+    if bool(self._ml_run.control_plane_url) and response.get("clusterId"):
+      self._ml_run.cluster_id = response["clusterId"]
+
+    resp_workload_details = response.get("workloadDetails")
+    if isinstance(resp_workload_details, dict) and resp_workload_details:
+      self._ml_run.workload_details = _merge_workload_details_from_response(
+          self._ml_run.workload_details, resp_workload_details
+      )
+
+  def _sync_gke_run_from_control_plane(
+      self, mlrun: mlrun_types.MLRun, **resolve_kwargs: Any
+  ) -> None:
+    """Synchronizes canonical GKE run details from the control plane."""
+    try:
+      response = self._control_plane_client.resolve_active_gke_ml_run(  # pyrefly: ignore[missing-attribute]
+          mlrun.workload_details,
+          hostname=host_utils.get_hostname(),
+          **resolve_kwargs,
+      )
+      if response:
+        self._update_ml_run_from_response(response)
+        logger.info(
+            "Synchronized GKE ML run from control plane: %s", mlrun.name
+        )
+    except requests.exceptions.RequestException as e_sync:
+      logger.warning("Failed to sync GKE ML run from control plane: %s", e_sync)
 
   def _create_ml_run_on_control_plane(self, mlrun: mlrun_types.MLRun) -> None:
     """Helper to call create_ml_run on control plane client."""
@@ -545,6 +633,7 @@ class GlobalRunManager:
           )
           self._ps_creation_start_time = None
           return
+
         hostname = host_utils.get_hostname()
         if isinstance(
             client,
@@ -554,16 +643,29 @@ class GlobalRunManager:
           base_dir = get_profile_base_dir(self._ml_run)
           profile_path = f"{base_dir}/plugins/profile/{session_id}"
         else:
-          workload_details = self._ml_run.workload_details or {}
-          if not workload_details.get("targets", None):
+          if _should_sync_gke_run_on_worker(
+              self._ml_run, bool(self._ml_run.control_plane_url)
+          ):
+            self._sync_gke_run_from_control_plane(
+                self._ml_run, max_attempts=2, initial_delay_sec=0.0
+            )
+          profiler_target = _find_profiler_target(
+              self._ml_run.workload_details, hostname
+          )
+          if profiler_target is None:
             # Attempt to fetch targets, and if missing, try updating
             # workload_details and fetch again as the backend might populate it.
             for i in range(self._MAX_GET_ML_RUN_ATTEMPTS):
               resp = client.get_ml_run(self._ml_run.name)
-              workload_details = resp.get("workloadDetails", {})
+              workload_details = _merge_workload_details_from_response(
+                  self._ml_run.workload_details,
+                  resp.get("workloadDetails") or {},
+              )
               self._ml_run.workload_details = workload_details
-
-              if len(workload_details.get("targets", [])) > 0:
+              profiler_target = _find_profiler_target(
+                  workload_details, hostname
+              )
+              if profiler_target is not None:
                 break
 
               if i == 0:
@@ -580,22 +682,14 @@ class GlobalRunManager:
                 )
                 continue
 
-              logger.error(
-                  "No targets found in ML Run workload details even after"
-                  " update ML Run, aborting session creation."
-              )
-              self._ps_creation_start_time = None
-              return
+              if not workload_details.get("targets"):
+                logger.error(
+                    "No targets found in ML Run workload details even after"
+                    " update ML Run, aborting session creation."
+                )
+                self._ps_creation_start_time = None
+                return
 
-          profiler_target = None
-          for target in workload_details.get("targets", []):
-            # In GKE, hostname is the pod name without unique suffix.
-            # In Slurm / Other orchestrators, hostname is the instance name.
-            if target.get("hostname", "") == hostname or target.get(
-                "displayName", ""
-            ).startswith(hostname):
-              profiler_target = target.get("displayName", None)
-              break
           profile_path = self._ml_run.gcs_path + "/" + session_id  # pyrefly: ignore[unsupported-operation]
 
         if not profiler_target:
