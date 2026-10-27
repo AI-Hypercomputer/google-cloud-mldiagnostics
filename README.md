@@ -39,13 +39,14 @@
   - [Deploy Workload with SDK integrated](#deploy-workload-with-sdk-integrated)
 - [Using ML Diagnostics with Maxtext](#using-ml-diagnostics-with-maxtext)
 - [Using ML Diagnostics with vLLM](#using-ml-diagnostics-with-vllm)
+- [Using ML Diagnostics with PyTorch on TPU](#using-ml-diagnostics-with-pytorch-on-tpu)
 
 ## Overview
 
 [**Release Notes**](https://github.com/AI-Hypercomputer/google-cloud-mldiagnostics/blob/main/docs/release_notes.md)
 
 
-**Note:** Google Cloud ML Diagnostics supports JAX and vLLM on Google Cloud TPUs and GPUs today.
+**Note:** Google Cloud ML Diagnostics supports JAX, PyTorch, and vLLM on Google Cloud TPUs and GPUs today.
 
 Google Cloud ML Diagnostics is an end-to-end managed platform for optimizing
 and diagnosing AI/ML workloads on Google Cloud. The platform lets you collect
@@ -772,7 +773,7 @@ XLA, Tensorflow) for profile collection so you can use the same profile capture
 code across all frameworks. All the profile sessions will be captured in the GCS
 bucket defined in the machine learning run.
 
-**Note:** Google Cloud ML Diagnostics supports JAX and vLLM on Google Cloud TPUs and GPUs (support for other frameworks like sglang, Torch TPU, etc will come in the future).
+**Note:** Google Cloud ML Diagnostics supports JAX, PyTorch, and vLLM on Google Cloud TPUs and GPUs (support for other frameworks like sglang will come in the future).
 
 ```python
 # Support collection via APIs
@@ -1142,3 +1143,204 @@ You can capture profiler traces from your vLLM workload using any of the followi
 1. **Phased Profiling**: When `ENABLE_GOOGLE_DIAGON_ML_DIAGNOSTICS=True` and `PHASED_PROFILING_DIR` are configured, profiling is automatically captured across different inference workload phases (such as `PREFILL_ONLY`, `PREFILL_HEAVY`, `BALANCED`, and `DECODE_HEAVY`) for the number of steps specified by `PHASED_PROFILER_NUM_STEPS_TO_PROFILE_FOR`.
 2. **Manual (API-Triggered) Profiling**: You can programmatically trigger and stop profiling sessions by sending HTTP requests to vLLM's `/start_profile` and `/stop_profile` API endpoints while generating load against the server.
 3. **On-Demand UI Profiling**: Capture profile sessions directly from the **Profiles** tab of your MLRun in the Google Cloud Console (Cluster Director or GKE AI/ML Diagnostics UI).
+
+## Using ML Diagnostics with PyTorch on TPU
+
+Google Cloud ML Diagnostics natively supports distributed PyTorch TPU workloads (`torch_tpu`) across Cloud TPU generations (**v5e, v6e, v4, and v5p**).
+
+### Distributed Training Architecture
+
+PyTorch TPU workloads use a multi-process distributed architecture where **one independent process runs per TPU chip** (for example, 4 processes per host on TPU v5e/v6e). The SDK manages multi-process synchronization across both programmatic and live on-demand profiling:
+
+#### Programmatic Profiling Synchronization
+
+For programmatic profiling (`prof.start()` / `prof.stop()` or `with xprof():`), the SDK automatically synchronizes all distributed PyTorch ranks by executing `torch.distributed.barrier()` before starting and stopping trace collection. This collective barrier ensures all worker processes begin and end profiling at the exact same execution step, unifying multi-rank traces under a single cohesive session in XProf.
+
+#### Live On-Demand Profiling
+
+To support live on-demand profiling across multi-process workloads without port conflicts:
+
+1.  Each worker process binds its internal loopback profiler server to `127.0.0.1:(10000 + local_rank)`.
+2.  The host master process launches the `OnDemandXprofProxyServer` listening on external port `9999`.
+3.  When an on-demand profile is triggered from the Cloud Console, the proxy intercepts the request, fans out in parallel to all local rank servers, and assigns `override_hostname = f"{base_host}_{rank}"`.
+4.  Each rank writes its own trace file (`<hostname>_<rank>.xplane.pb`) to Cloud Storage without file collisions.
+
+### 1. Worker Script Entry Point (`worker_main`)
+
+Define a `worker_main()` function executed by each local TPU rank process to initialize distributed communication and run training. All worker ranks must call `machinelearning_run(...)` (do not wrap it inside `if dist.get_rank() == 0:`)—the SDK internally coordinates registration so only rank 0 contacts the control plane, while non-zero ranks initialize local managers and profiler servers:
+
+```python
+import torch
+import torch.distributed as dist
+import torch.tpu
+import torch.tpu.distributed
+
+from google_cloud_mldiagnostics import machinelearning_run
+from google_cloud_mldiagnostics import xprof
+from google_cloud_mldiagnostics.custom_types.mlrun_types import Framework
+
+
+def worker_main():
+  # 1. Initialize PyTorch Distributed with the TPU backend
+  dist.init_process_group(backend="tpu_dist")
+  device = torch.accelerator.current_accelerator()
+
+  # 2. Register Machine Learning Run (called on all ranks; do not guard with rank == 0)
+  machinelearning_run(
+      name="<run_name>",
+      run_group="<run_group>",
+      project="<project_id>",
+      region="us-central1",
+      gcs_path="gs://<bucket>/profiles",
+      on_demand_xprof=True,
+      log_system_metrics=True,
+      framework=Framework.PYTORCH,
+  )
+
+  # 3. Programmatic profiling session
+  prof = xprof()
+  prof.start("step_50_trace")
+
+  # ... model training loop ...
+
+  prof.stop()
+```
+
+*   `backend="tpu_dist"`: Initializes PyTorch distributed communication via the TPU runtime.
+*   `device = torch.accelerator.current_accelerator()`: Automatically resolves the local TPU device assigned to the current process (e.g., `tpu:0`).
+*   `machinelearning_run`: **All worker ranks must call `machinelearning_run(...)`** (do not guard with `if dist.get_rank() == 0:`). While the SDK internally skips control-plane registration on non-zero ranks, non-master ranks must still initialize `GlobalRunManager` (otherwise `prof.start()` raises `ProfilingError: No active ML run found for profiling` and hangs rank 0 at `torch.distributed.barrier()`) and start their local loopback profiler servers (`127.0.0.1:(10000 + local_rank)`) when `on_demand_xprof=True`.
+*   `framework=Framework.PYTORCH`: Informs the SDK that the workload is running PyTorch, ensuring that process ranks and device topologies are discovered using PyTorch accelerator APIs.
+*   `on_demand_xprof=True`: Starts the host-level `OnDemandXprofProxyServer` on port `9999` on the host master process. When an on-demand profile is triggered from the Cloud Console, the proxy multiplexes the request to internal loopback profilers (`127.0.0.1:(10000 + local_rank)`) across all local TPU ranks, writing distinct `<hostname>_<rank>.xplane.pb` traces to Cloud Storage without port or file collisions.
+*   `log_system_metrics=True`: Periodically logs TPU duty cycle, TensorCore utilization, and HBM memory usage to Cloud Logging.
+*   **Programmatic Profiling Synchronization**: When calling `prof.start()` / `prof.stop()` (or `with xprof():`), the SDK automatically executes `torch.distributed.barrier()` before starting and stopping trace collection. This collective barrier ensures all worker processes begin and end profiling at the exact same execution step, unifying multi-rank traces under a single cohesive session in XProf.
+
+### 2. Multi-Process Elastic Launch (`main`)
+
+On Cloud TPU, workloads launch one worker process per TPU chip (e.g., 4 processes on a `2x2` slice). Coordinate local worker process launching using `torch.distributed.launcher`:
+
+```python
+import os
+import torch
+from torch.distributed import launcher
+
+
+def main():
+  if "LOCAL_RANK" in os.environ:
+    worker_main()
+  else:
+    # Bootstrap TPU launch environment
+    torch.tpu.distributed.set_tpu_launch_env()
+
+    nproc_per_node = torch.accelerator.device_count()
+    if nproc_per_node == 0:
+      raise RuntimeError("No TPU devices found on this node.")
+
+    nnodes = int(os.getenv("NNODES", "1"))
+    node_rank = int(os.getenv("NODE_RANK", "0"))
+    master_addr = os.getenv("MASTER_ADDR", "localhost")
+    master_port = os.getenv("MASTER_PORT", "29500")
+
+    config = launcher.LaunchConfig(
+        min_nodes=nnodes,
+        max_nodes=nnodes,
+        nproc_per_node=nproc_per_node,
+        run_id="<run_id>",
+        rdzv_backend="c10d",
+        rdzv_endpoint="localhost:0" if nnodes == 1 else f"{master_addr}:{master_port}",
+        rdzv_configs={"rank": node_rank} if nnodes > 1 else {},
+        max_restarts=0,
+    )
+    launcher.elastic_launch(config, worker_main)()
+
+
+if __name__ == "__main__":
+  main()
+```
+
+*   `torch.tpu.distributed.set_tpu_launch_env()`: Automatically derives `NNODES`, `NODE_RANK`, `MASTER_ADDR`, and `MASTER_PORT` from GKE/GCE TPU environment variables.
+*   `torch.accelerator.device_count()`: Detects available TPU chips on the host (e.g., 4).
+*   `launcher.elastic_launch`: Spawns the worker processes executing `worker_main()`.
+
+### 3. Package Workload with Dockerfile
+
+Package the PyTorch TPU application and dependencies into a container image:
+
+```dockerfile
+FROM python:3.12-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential ca-certificates curl wget libc++-dev libc++abi-dev libunwind8 \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV PYTHONUNBUFFERED="1" \
+    PYTHONDONTWRITEBYTECODE="1" \
+    ALLOW_MULTIPLE_LIBTPU_LOAD="true"
+
+RUN pip install --no-cache-dir \
+    torch \
+    libtpu \
+    torch_tpu \
+    google_cloud_mldiagnostics \
+    xprof
+
+COPY train.py ./
+
+ENTRYPOINT ["python3", "train.py"]
+```
+
+### 4. Deploy on GKE with JobSet
+
+When configuring your Kubernetes **JobSet** for PyTorch TPU, enable DNS hostnames for inter-pod communication and specify the accelerator nodeSelector and container configurations:
+
+```yaml
+spec:
+  network:
+    enableDNSHostnames: true
+  # ...
+  nodeSelector:
+    cloud.google.com/gke-tpu-accelerator: tpu-v5-lite-podslice
+    cloud.google.com/gke-tpu-topology: 2x2
+  containers:
+    - name: torch-tpu-worker
+      image: <IMAGE_URI>
+      ports:
+        - name: xprof-proxy
+          containerPort: 9999
+      env:
+        - name: TORCH_TPU_TOPOLOGY
+          value: "2x2"
+      resources:
+        limits:
+          google.com/tpu: 4
+        requests:
+          google.com/tpu: 4
+```
+
+*   `network.enableDNSHostnames: true`: Enables deterministic pod DNS hostnames, required for distributed worker discovery and multi-host communication.
+*   `containerPort: 9999`: Exposes the `OnDemandXprofProxyServer` port for on-demand profiling captures from the Cloud Console.
+*   `TORCH_TPU_TOPOLOGY`: Informs the PyTorch TPU runtime of the slice topology (e.g. `2x2`).
+*   `google.com/tpu: 4`: Allocates 4 TPU chips to the container.
+
+### 5. Deploy on GCE (TPU VM)
+
+For standalone development directly on a single-host TPU VM:
+
+```bash
+# 1. Provision TPU VM
+gcloud compute tpus tpu-vm create my-tpu-vm \
+    --project=<project_id> \
+    --zone=us-central1-a \
+    --accelerator-type=v5litepod-4 \
+    --version=v2-alpha-tpuv5-lite
+
+# 2. Install dependencies & copy script
+gcloud compute tpus tpu-vm ssh my-tpu-vm --zone=us-central1-a \
+    --command="pip install --no-cache-dir torch libtpu torch_tpu google_cloud_mldiagnostics xprof"
+gcloud compute tpus tpu-vm scp train.py my-tpu-vm:~/train.py --zone=us-central1-a
+
+# 3. Execute workload
+gcloud compute tpus tpu-vm ssh my-tpu-vm --zone=us-central1-a \
+    --command="python3 train.py"
+```
