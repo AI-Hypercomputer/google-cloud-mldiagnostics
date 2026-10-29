@@ -38,6 +38,7 @@
   - [Package Workload with SDK with Dockerfile for GKE](#package-workload-with-sdk-with-dockerfile-for-gke)
   - [Deploy Workload with SDK integrated](#deploy-workload-with-sdk-integrated)
 - [Using ML Diagnostics with Maxtext](#using-ml-diagnostics-with-maxtext)
+- [Using ML Diagnostics for RL (MaxText + Tunix + Pathways)](#using-ml-diagnostics-for-rl-maxtext--tunix--pathways)
 - [Using ML Diagnostics with vLLM](#using-ml-diagnostics-with-vllm)
 - [Using ML Diagnostics with PyTorch on TPU](#using-ml-diagnostics-with-pytorch-on-tpu)
 
@@ -46,7 +47,7 @@
 [**Release Notes**](https://github.com/AI-Hypercomputer/google-cloud-mldiagnostics/blob/main/docs/release_notes.md)
 
 
-**Note:** Google Cloud ML Diagnostics supports JAX, PyTorch, and vLLM on Google Cloud TPUs and GPUs today.
+**Note:** Google Cloud ML Diagnostics supports JAX, PyTorch, vLLM, and RL (Maxtext + Tunix + Pathways) on Google Cloud TPUs and GPUs today.
 
 Google Cloud ML Diagnostics is an end-to-end managed platform for optimizing
 and diagnosing AI/ML workloads on Google Cloud. The platform lets you collect
@@ -773,7 +774,7 @@ XLA, Tensorflow) for profile collection so you can use the same profile capture
 code across all frameworks. All the profile sessions will be captured in the GCS
 bucket defined in the machine learning run.
 
-**Note:** Google Cloud ML Diagnostics supports JAX, PyTorch, and vLLM on Google Cloud TPUs and GPUs (support for other frameworks like sglang will come in the future).
+**Note:** Google Cloud ML Diagnostics supports JAX, PyTorch, vLLM, and RL (Maxtext + Tunix + Pathways) on Google Cloud TPUs and GPUs (support for other frameworks like sglang will come in the future).
 
 ```python
 # Support collection via APIs
@@ -1054,6 +1055,107 @@ python3 -m MaxText.train src/MaxText/configs/base.yml run_name="demo-mldiagnosti
 ```
 
 `upload_all_profiler_results=True` captures multihost profiles from all hosts.
+
+## Using ML Diagnostics for RL (MaxText + Tunix + Pathways)
+
+Google Cloud ML Diagnostics is natively supported with the Reinforcement Learning (RL) post-training stack on Cloud TPUs:
+
+- **[MaxText](https://github.com/AI-Hypercomputer/maxtext)**: Provides the model definitions, configuration system (`src/maxtext/configs/post_train/rl.yml`), and RL training entrypoint (`maxtext.trainers.post_train.rl.train_rl`).
+- **[Tunix](https://github.com/google/tunix)**: Executes the RL post-training loop (such as GRPO and GSPO-Token), coordinating policy updates on the `actor` role and inference generation on the `rollout` role.
+- **Pathways**: Provides single-controller distributed execution across TPU worker hosts for the trainer and sampler meshes.
+
+When `managed_mldiagnostics: True` is enabled on an RL workload, ML Diagnostics automatically:
+
+- Creates a managed `MachineLearningRun` (`MLRun`) and records the workload configurations.
+- Streams RL training, reward, completion, and performance metrics at the configured `log_period` interval.
+- Captures per-role XProf traces (`actor` and `rollout`) by counting role invocations (`actor_invocation_<n>` and `rollout_invocation_<n>`) across Pathways worker hosts when `profiler="xplane"` is enabled, saving traces under `<base_output_directory>/<run_name>/managed-mldiagnostics/<mlrun_name>/plugins/profile/<role>_invocation_<n>/`.
+
+### 1. RL Configuration Flags (`rl.yml`)
+
+Configure ML Diagnostics and per-role invocation profiling in `src/maxtext/configs/post_train/rl.yml` or via command-line overrides:
+
+```yaml
+run_name: "<your_run_name>"
+base_output_directory: "gs://<your_gcs_bucket_dir>"
+
+# Enable managed ML Diagnostics run registration and metric streaming
+managed_mldiagnostics: True
+enable_tunix_perf_metrics: True
+
+# Enable per-role invocation XProf profiling
+profiler: "xplane"
+rl:
+  profiler_start_invocation: 20
+  profiler_num_invocations: 1
+  profiler_max_num_hosts: 2
+```
+
+- `run_name` & `base_output_directory`: Required Cloud Storage (`gs://`) output path and run identifier.
+- `managed_mldiagnostics`: Enables `MLRun` registration, RL scalar metric streaming, and profile session uploads.
+- `enable_tunix_perf_metrics`: Enables Tunix step-timing and performance metrics (`perf/train/*`).
+- `profiler: "xplane"`: Enables per-role (`actor` and `rollout`) XProf trace capture.
+- `rl.profiler_start_invocation`: Zero-indexed role invocation to begin profiling (past initial compilation and warmup).
+- `rl.profiler_num_invocations`: Number of consecutive invocations to profile for each role (`actor` and `rollout`).
+- `rl.profiler_max_num_hosts`: Number of Pathways worker hosts to trace. Defaults to `1` (which traces only worker 0); set this to the number of worker hosts in your TPU topology (for example, `2` on a 2-host `v5litepod-8` slice) so both trainer and sampler hosts are captured in the trace.
+
+> **Note:**
+> - **Pathways multi-host profiling**: By default, `pathwaysutils` only traces worker 0 (`rl.profiler_max_num_hosts: 1`). When the `actor` trainer and `rollout` sampler are disaggregated across multiple TPU worker hosts on Pathways (which requires at least 2 VMs, such as `v5litepod-8` with `2x4` topology), leaving `rl.profiler_max_num_hosts` at `1` omits the sampler host from rollout traces. Set `rl.profiler_max_num_hosts` to at least the total number of TPU worker hosts in your slice (for example, `2`).
+> - **Invocation counting vs. step flags**: RL profiling counts **role invocations** (`rl.profiler_start_invocation`, `rl.profiler_num_invocations`), where `actor` runs once per policy update and `rollout` runs once per generation batch. If legacy `skip_first_n_steps_for_profiler` or `profiler_steps` flags are passed without `rl.profiler_*` overrides, `RLConfig` maps them to `rl.profiler_start_invocation` and `rl.profiler_num_invocations`.
+
+### 2. Prepare Docker Image for RL
+
+Package the MaxText post-training container image with `google-cloud-mldiagnostics`, `xprof`, and `google-cloud-logging`:
+
+```dockerfile
+FROM us-docker.pkg.dev/cloud-tpu-images/maxtext-images/tpu_post_training:latest
+
+RUN pip install --no-cache-dir --upgrade \
+    google-cloud-mldiagnostics \
+    xprof \
+    google-cloud-logging
+```
+
+### 3. Run RL with ML Diagnostics on GKE (Pathways)
+
+Ensure `mldiagnostics-injection-webhook` is installed in your GKE cluster (see [Configure GKE Cluster](#configure-gke-cluster)) so the `MLRun` metadata is automatically injected into your JobSet pods, then submit the RL workload with Pathways enabled (for example, on a 2-host `v5litepod-8` / `2x4` slice using Cluster Toolkit `gcluster job submit --pathways`):
+
+```bash
+MAXTEXT_COMMAND="ENABLE_PATHWAYS_PERSISTENCE=1 \
+python3 -m maxtext.trainers.post_train.rl.train_rl \
+  run_name=<your_run_name> \
+  model_name=<your_model_name> \
+  base_output_directory=gs://<your_gcs_bucket_dir> \
+  num_batches=500 \
+  managed_mldiagnostics=True \
+  enable_tunix_perf_metrics=True \
+  profiler=xplane \
+  rl.profiler_start_invocation=20 \
+  rl.profiler_num_invocations=1 \
+  rl.profiler_max_num_hosts=2"
+
+gcluster job submit \
+  --image="<your_rl_image>" \
+  --name="<your_run_name>" \
+  --pathways \
+  --compute-type="v5litepod-8" \
+  --topology="2x4" \
+  --num-slices=1 \
+  --pathways-gcs-location="gs://<your_gcs_bucket_dir>" \
+  --command="${MAXTEXT_COMMAND}"
+```
+
+### 4. Viewing RL Metrics and Per-Role Profiles
+
+When the workload starts, the SDK logs the registered `MLRun` name, the direct Google Cloud Console link, and the Cloud Storage profiling output path in the workload container logs (see [Deploy Workload with SDK integrated](#deploy-workload-with-sdk-integrated) and [Viewing Logs, Metrics and Profiles](#viewing-logs-metrics-and-profiles)):
+
+```bash
+kubectl logs -l jobset.sigs.k8s.io/jobset-name=<your_run_name> -c jax-tpu
+```
+
+Open the Google Cloud Console link (or navigate to **Cluster Director -> Diagnostics** or **GKE -> AI/ML -> Diagnostics**) and select your `MLRun`:
+
+1. **Model Metrics**: View time-series charts for RL training metrics (`actor/train/*`), reward metrics (`rewards/train/*`), completion lengths (`completions/train/*`), and step timing (`perf/train/*`).
+2. **Profiles**: View the captured per-role XProf sessions—listed separately as `actor_invocation_<n>` (policy update) and `rollout_invocation_<n>` (rollout generation)—in the **Profiles** tab of your `MLRun` and click to open each trace in the managed XProf viewer. Per-host `*.xplane.pb` trace files are organized in Cloud Storage under `<base_output_directory>/<run_name>/managed-mldiagnostics/<mlrun_name>/plugins/profile/<role>_invocation_<n>/`.
 
 ## Using ML Diagnostics with vLLM
 
