@@ -15,6 +15,7 @@
 """Profiling SDK wrapper for Google Cloud ML Diagnostics."""
 
 import abc
+import enum
 import logging
 import threading
 import time
@@ -69,6 +70,10 @@ class BaseProfilerEngine(abc.ABC):
   @abc.abstractmethod
   def should_report_session(self) -> bool:
     """Returns whether profiler sessions should be reported to the control plane."""
+    pass
+
+  def synchronize_ranks(self) -> None:
+    """Synchronizes distributed ranks when profiling starts or stops."""
     pass
 
   # --- On-Demand Profiling Server Methods ---
@@ -154,6 +159,10 @@ class PyTorchProfilerEngine(BaseProfilerEngine):
 
   def should_report_session(self) -> bool:
     return False
+
+  def synchronize_ranks(self) -> None:
+    """See base class."""
+    self._synchronize_distributed_barrier()
 
   def _synchronize_distributed_barrier(self) -> None:
     """Synchronizes all distributed PyTorch ranks via barrier if initialized."""
@@ -320,6 +329,15 @@ def get_profiler_engine(
 # Main Xprof Wrapper Class
 # ==============================================================================
 
+
+class ProfilingState(enum.Enum):
+  """Represents the current state of a programmatic profiling session."""
+
+  IDLE = 0
+  ACTIVE = 1
+  SKIPPED = 2
+
+
 class Xprof:
   """Wrapper for profiling with Google Cloud ML Diagnostics.
 
@@ -347,7 +365,7 @@ class Xprof:
     self._resolved_run = None
 
     self._current_session_id = None
-    self._is_profiling = False
+    self._profiling_state = ProfilingState.IDLE
     self._gcs_profile_dir = None
     self._initialized = False
     self._process_index_list = process_index_list
@@ -461,6 +479,10 @@ class Xprof:
           self._session_phase,
       )
 
+  @property
+  def _is_profiling(self) -> bool:
+    return self._profiling_state == ProfilingState.ACTIVE
+
   def _update_session_state(
       self,
       session_phase: str,
@@ -468,8 +490,12 @@ class Xprof:
   ) -> None:
     """Updates profiler session state, timestamps, and optional status log."""
     self._session_phase = session_phase
-    self._is_profiling = session_phase == "ACTIVE"
-    if self._is_profiling:
+    self._profiling_state = (
+        ProfilingState.ACTIVE
+        if session_phase == "ACTIVE"
+        else ProfilingState.IDLE
+    )
+    if self._profiling_state == ProfilingState.ACTIVE:
       if self._start_time is None:
         self._start_time = time.time()
       self._end_time = None
@@ -479,6 +505,23 @@ class Xprof:
       logger.info(
           "profiling_status: %s (session_phase: %s)" % (log_msg, session_phase)
       )
+
+  def _start_skipped_state(self) -> None:
+    """Synchronizes ranks (if applicable) and transitions to SKIPPED state."""
+    if (
+        self._resolved_run is not None
+        and not self._resolved_run.metric_only_run
+        and self._engine is not None
+    ):
+      self._engine.synchronize_ranks()
+      self._profiling_state = ProfilingState.SKIPPED
+    logger.info("profiling_status: skipped")
+
+  def _stop_skipped_state(self, safe_to_sync: bool = True) -> None:
+    """Resets from SKIPPED to IDLE state and synchronizes ranks if safe."""
+    self._profiling_state = ProfilingState.IDLE
+    if safe_to_sync and self._engine is not None:
+      self._engine.synchronize_ranks()
 
   def start(self, session_id: str | None = None) -> None:
     """Starts the profiler.
@@ -490,12 +533,12 @@ class Xprof:
     # Ensure initialization happens before starting
     self._ensure_initialized()
 
-    if self._is_profiling:
+    if self._profiling_state != ProfilingState.IDLE:
       logger.warning("Profiling is already active. Call stop() first.")
       return
 
     if not self._should_profile():
-      logger.info("profiling_status: skipped")
+      self._start_skipped_state()
       return
 
     if self._engine is None or self._gcs_profile_dir is None:
@@ -517,6 +560,7 @@ class Xprof:
       self._update_session_state(
           session_phase="FAILED",
       )
+      self._profiling_state = ProfilingState.SKIPPED
       if self._engine.should_report_session():
         self._report_profiler_session(
             create_new_session=True, context_msg="on_start"
@@ -530,7 +574,11 @@ class Xprof:
 
   def stop(self):
     """Stops the profiler."""
-    if not self._is_profiling:
+    if self._profiling_state == ProfilingState.SKIPPED:
+      self._stop_skipped_state(safe_to_sync=True)
+      return
+
+    if self._profiling_state != ProfilingState.ACTIVE:
       logger.warning("No active profiling session to stop.")
       return
 
@@ -562,7 +610,7 @@ class Xprof:
     """Context manager entry point."""
     self._ensure_initialized()
     if not self._should_profile():
-      logger.info("profiling_status: skipped")
+      self._start_skipped_state()
       return self
 
     if self._engine is None or self._gcs_profile_dir is None:
@@ -586,6 +634,7 @@ class Xprof:
       self._update_session_state(
           session_phase="FAILED",
       )
+      self._profiling_state = ProfilingState.SKIPPED
       if self._engine.should_report_session():
         self._report_profiler_session(
             create_new_session=True, context_msg="on_context_enter"
@@ -601,7 +650,11 @@ class Xprof:
 
   def __exit__(self, exc_type, exc_val, exc_tb):
     """Context manager exit point."""
-    if self._is_profiling:
+    if self._profiling_state == ProfilingState.SKIPPED:
+      self._stop_skipped_state(safe_to_sync=exc_type is None)
+      return
+
+    if self._profiling_state == ProfilingState.ACTIVE:
       if (
           self._trace_context_manager is not None
           and self._engine is not None
