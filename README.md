@@ -41,6 +41,7 @@
 - [Using ML Diagnostics for RL (MaxText + Tunix + Pathways)](#using-ml-diagnostics-for-rl-maxtext--tunix--pathways)
 - [Using ML Diagnostics with vLLM](#using-ml-diagnostics-with-vllm)
 - [Using ML Diagnostics with PyTorch on TPU](#using-ml-diagnostics-with-pytorch-on-tpu)
+- [Using ML Diagnostics with Cluster Toolkit (CTK)](#using-ml-diagnostics-with-cluster-toolkit-ctk)
 
 ## Overview
 
@@ -147,6 +148,13 @@ This requires the `logging.buckets.update` permission (for example `roles/loggin
 **Note:** Log Analytics does not backfill. Only logs ingested *after* it is enabled are queryable, so runs that completed before enabling it will still show empty charts — launch a new run to verify.
 
 ### Configure GKE Cluster
+
+> **Tip:** If you provision your GKE cluster using
+> [Google Cloud Cluster Toolkit (CTK)](#using-ml-diagnostics-with-cluster-toolkit-ctk),
+> setting `enable_ml_diagnostics: true` in your cluster blueprint automatically
+> configures the ML Diagnostics webhook, connection operator, namespace labels,
+> and Workload Identity service accounts—you can skip the manual cluster setup
+> steps below.
 
 If GKE will be used for the ML workload, user needs to install the following to
 their GKE cluster. Please ensure the GKE cluster is configured as a regional
@@ -1446,3 +1454,261 @@ gcloud compute tpus tpu-vm scp train.py my-tpu-vm:~/train.py --zone=us-central1-
 gcloud compute tpus tpu-vm ssh my-tpu-vm --zone=us-central1-a \
     --command="python3 train.py"
 ```
+
+## Using ML Diagnostics with Cluster Toolkit (CTK)
+
+[Google Cloud Cluster Toolkit](https://github.com/GoogleCloudPlatform/cluster-toolkit)
+(`gcluster`) natively supports Google Cloud ML Diagnostics on Google Kubernetes
+Engine (GKE). When you deploy a GKE cluster using Cluster Toolkit blueprints
+(such as
+[`gke-tpu-v6e`](https://github.com/GoogleCloudPlatform/cluster-toolkit/tree/main/examples/gke-tpu-v6e)
+or
+[`gke-tpu-7x`](https://github.com/GoogleCloudPlatform/cluster-toolkit/tree/main/examples/gke-tpu-7x)),
+you can enable GKE-managed ML Diagnostics directly in your cluster blueprint,
+automating all manual cluster and IAM setup steps described in
+[IAM Permissions](#iam-permissions) and
+[Configure GKE Cluster](#configure-gke-cluster).
+
+> **Note:** Ensure the
+> [Cluster Director API](#enable-cluster-director-api) and
+> [Log Analytics on Cloud Logging](#enable-log-analytics-on-cloud-logging) are
+> enabled on your project before running workloads.
+
+### What Gets Enabled Automatically
+
+When `enable_ml_diagnostics: true` is set in a Cluster Toolkit GKE blueprint,
+Cluster Toolkit automatically provisions and configures:
+
+1.  **GKE-Managed ML Diagnostics Control Plane & Operators**: Configures
+    `managed_machine_learning_diagnostics_config { enabled = true }` on the GKE
+    cluster, which automatically deploys and manages the in-cluster components
+    (`mldiagnostics-injection-webhook`, `mldiagnostics-connection-operator`, and
+    `MLDiagnosticsConnection` CRDs) without manual `helm` or `cert-manager`
+    installation.
+2.  **Automatic Namespace Labeling**: Creates the target workload namespace
+    (`vars.user_namespace`) and labels it with
+    `managed-mldiagnostics-gke: "true"` so any `JobSet`, `LeaderWorkerSet`
+    (LWS), or `RayJob` deployed in that namespace automatically receives pod
+    metadata injection.
+3.  **Workload Identity & IAM Service Accounts**: Provisions a Google Cloud
+    Service Account (default: `gke-wl-sa`) with the required project roles
+    (`roles/hypercomputecluster.editor`, `roles/logging.logWriter`,
+    `roles/monitoring.metricWriter`, `roles/monitoring.viewer`,
+    `roles/stackdriver.resourceMetadata.writer`, `roles/storage.admin`,
+    `roles/artifactregistry.reader`, and `roles/container.admin`) and binds it
+    via Workload Identity to a Kubernetes Service Account (default:
+    `workload-identity-k8s-sa`) in your workload namespace.
+4.  **GKE Version Validation**: Enforces a Terraform precondition check
+    verifying that the GKE cluster version is `1.35.0-gke.3065000` or higher.
+
+### How to Enable ML Diagnostics in Cluster Toolkit
+
+ML Diagnostics is **enabled by default** across all standard GKE TPU blueprints
+in Cluster Toolkit (`gke-tpu-v4`, `gke-tpu-v5e`, `gke-tpu-v5p`, `gke-tpu-v6e`,
+and `gke-tpu-7x`, including the `-advanced` variants). For other GKE blueprints
+(such as GPU or custom clusters), `enable_ml_diagnostics` defaults to `false` in
+the `modules/scheduler/gke-cluster` module.
+
+To enable or customize ML Diagnostics in your Cluster Toolkit blueprint:
+
+#### 1. Configure Blueprint Settings
+
+In your blueprint YAML (for example, `examples/gke-tpu-v6e/gke-tpu-v6e.yaml`),
+ensure the `workload_service_account` module includes
+`hypercomputecluster.editor` and the `modules/scheduler/gke-cluster` module sets
+`enable_ml_diagnostics: true`, `configure_workload_identity_sa: true`, and
+`version_prefix: "1.35."`:
+
+```yaml
+vars:
+  # The namespace to be configured and labeled for running ML workloads
+  user_namespace: default
+
+deployment_groups:
+- group: primary
+  modules:
+  - id: workload_service_account
+    source: modules/project/service-account
+    settings:
+      name: gke-wl-sa
+      project_roles:
+      - logging.logWriter
+      - monitoring.metricWriter
+      - monitoring.viewer
+      - stackdriver.resourceMetadata.writer
+      - storage.admin
+      - artifactregistry.reader
+      - container.admin
+      - hypercomputecluster.editor
+
+  - id: gke-tpu-v6e-cluster
+    source: modules/scheduler/gke-cluster
+    use: [gke-tpu-v6e-net-0, workload_service_account]
+    settings:
+      configure_workload_identity_sa: true
+      namespace: $(vars.user_namespace)
+      enable_ml_diagnostics: true
+      version_prefix: "1.35."
+      release_channel: REGULAR
+```
+
+#### 2. Deploy the Cluster
+
+From the root of the
+[`cluster-toolkit`](https://github.com/GoogleCloudPlatform/cluster-toolkit)
+repository, build `gcluster` and deploy your blueprint:
+
+```bash
+test -x ./gcluster || make
+
+./gcluster deploy \
+  -d examples/gke-tpu-v6e/gke-tpu-v6e-deployment.yaml \
+  examples/gke-tpu-v6e/gke-tpu-v6e.yaml
+```
+
+#### 3. Connect to the Cluster and Verify Configuration
+
+Fetch cluster credentials and verify that the workload namespace is labeled with
+`managed-mldiagnostics-gke=true` and the `workload-identity-k8s-sa` service
+account exists:
+
+```bash
+gcloud container clusters get-credentials <DEPLOYMENT_NAME> \
+  --region=<REGION> \
+  --project=<PROJECT_ID>
+
+kubectl get namespace <user_namespace> --show-labels
+kubectl get serviceaccount -n <user_namespace>
+```
+
+### Sample Workload Example with Cluster Toolkit
+
+Cluster Toolkit provides a ready-to-run sample workload in
+[`examples/gke-tpu-v6e/ml-diagnostics-sample-workload-test`](https://github.com/GoogleCloudPlatform/cluster-toolkit/tree/main/examples/gke-tpu-v6e/ml-diagnostics-sample-workload-test)
+to validate your GKE TPU cluster's ML Diagnostics setup:
+
+- [`sample_workload/sample_workload.py`](https://github.com/GoogleCloudPlatform/cluster-toolkit/blob/main/examples/gke-tpu-v6e/ml-diagnostics-sample-workload-test/sample_workload/sample_workload.py):
+  Initializes JAX distributed execution, registers a
+  [`machinelearning_run`](#creating-a-machine-learning-run) using `PROJECT_ID`,
+  `REGION`, and `GCS_PATH` environment variables, captures an
+  [`xprof`](#programmatic-profile-capture) trace session, and records
+  [model quality and performance metrics](#collect-metrics).
+- [`Dockerfile`](https://github.com/GoogleCloudPlatform/cluster-toolkit/blob/main/examples/gke-tpu-v6e/ml-diagnostics-sample-workload-test/Dockerfile):
+  Packages `sample_workload.py` with `jax[tpu]`, `libtpu`,
+  `google-cloud-mldiagnostics`, and `xprof` (see
+  [Package Workload with SDK with Dockerfile for GKE](#package-workload-with-sdk-with-dockerfile-for-gke)).
+
+#### 1. Build and Push the Sample Image
+
+From the sample test directory in your cloned `cluster-toolkit` repository,
+create an Artifact Registry repository and build and push the container image:
+
+```bash
+export REGION=<region>           # e.g., us-central1
+export PROJECT_ID=<project_id>   # Your Google Cloud Project ID
+export REPO_NAME=mldiagnostics-tests
+export IMAGE_URI="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO_NAME}/sample-workload:latest"
+
+gcloud artifacts repositories create ${REPO_NAME} \
+    --repository-format=docker \
+    --project="${PROJECT_ID}" \
+    --location="${REGION}"
+
+docker build -t "${IMAGE_URI}" .
+docker push "${IMAGE_URI}"
+```
+
+#### 2. Configure and Submit `sample_job.yaml`
+
+Update the placeholders in
+[`sample_job.yaml`](https://github.com/GoogleCloudPlatform/cluster-toolkit/blob/main/examples/gke-tpu-v6e/ml-diagnostics-sample-workload-test/sample_job.yaml)
+to match your Cluster Toolkit blueprint deployment:
+
+- `<user_namespace>`: Workload namespace from your blueprint
+  (`vars.user_namespace`, default: `default`).
+- `<k8s-service-account-name>`: Workload Identity Kubernetes service account
+  created by Cluster Toolkit (default: `workload-identity-k8s-sa`).
+- `<tpu_accelerator>` & `<tpu_topology>`: Accelerator and topology labels from
+  your blueprint (for example, `tpu-v6e-slice` with `4x4` for TPU v6e, or
+  `tpu7x` with `2x2x1` for TPU 7x).
+- `<workload_image>`: The `${IMAGE_URI}` pushed in Step 1.
+- `PROJECT_ID`, `REGION`, and `GCS_PATH`: Your project ID, cluster region, and
+  an existing GCS bucket path (for example,
+  `gs://your-ml-diagnostics-bucket/tests`).
+- `google.com/tpu`: Chips per node matching your `machine_type` (for example,
+  `4`).
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: tpu-discovery-service
+  namespace: <user_namespace>
+spec:
+  clusterIP: None
+  selector:
+    jobset.sigs.k8s.io/jobset-name: sample-tpu-jobset
+---
+apiVersion: jobset.x-k8s.io/v1alpha2
+kind: JobSet
+metadata:
+  name: sample-tpu-jobset
+  namespace: <user_namespace>
+  labels:
+    diagon-enabled: "true"
+    kueue.x-k8s.io/queue-name: user-queue
+spec:
+  network:
+    enableDNSHostnames: true
+    subdomain: tpu-discovery-service
+  replicatedJobs:
+  - name: tpu-slice
+    replicas: 1
+    template:
+      spec:
+        parallelism: 1
+        completions: 1
+        completionMode: Indexed
+        backoffLimit: 100
+        template:
+          spec:
+            serviceAccountName: <k8s-service-account-name> # default: workload-identity-k8s-sa
+            automountServiceAccountToken: true
+            restartPolicy: Never
+            nodeSelector:
+              cloud.google.com/gke-tpu-accelerator: <tpu_accelerator> # e.g., tpu-v6e-slice or tpu7x
+              cloud.google.com/gke-tpu-topology: <tpu_topology>       # e.g., 2x2, 4x4, or 2x2x1
+            containers:
+            - name: jax-job
+              image: <workload_image>
+              env:
+              - name: PROJECT_ID
+                value: <project_id>
+              - name: REGION
+                value: <region>
+              - name: GCS_PATH
+                value: <gcs_bucket_path> # e.g., "gs://your-ml-diagnostics-bucket/tests"
+              ports:
+              - containerPort: 8471
+              - containerPort: 8431
+              securityContext:
+                privileged: true
+              resources:
+                requests:
+                  google.com/tpu: 4
+                limits:
+                  google.com/tpu: 4
+```
+
+Submit the job and inspect the pod logs (`sample-tpu-jobset-tpu-slice-...`) to
+retrieve the Google Cloud Console `MLRun` URL:
+
+```bash
+kubectl apply -f sample_job.yaml
+kubectl get all -n <user_namespace>
+kubectl logs <pod_name> -n <user_namespace>
+```
+
+Once running, open the `MLRun` URL to inspect your workload configs, metrics,
+and XProf profiles in the Console as described in
+[Viewing Logs, Metrics and Profiles](#viewing-logs-metrics-and-profiles).
