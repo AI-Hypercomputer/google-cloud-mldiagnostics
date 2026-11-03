@@ -37,6 +37,38 @@ google-cloud-mldiagnostics is [available in PyPI](https://pypi.org/project/googl
 
 ## Releases
 
+### v1.0.11
+
+#### Changes
+
+- **Webhook-less GKE Workload Registration (`workload_details`)**:
+  - Added an optional `workload_details` parameter to `machinelearning_run()` so GKE workloads can register and track MLRuns without requiring `mldiagnostics-injection-webhook` (or the `managed-mldiagnostics-gke=true` label).
+
+  **Example Usage:**
+
+  ```python
+  run = machinelearning_run(
+      name="<run_name>",
+      run_group="<run_group>",
+      project="<some_project>",
+      region="<some_region>",
+      gcs_path="gs://<some_bucket>",
+      on_demand_xprof=True,
+      workload_details={
+          "id": "<jobset_name>",
+          "kind": "JobSet",
+          "namespace": "<k8s_namespace>",
+          "cluster": "<gke_cluster_name>",
+      },
+  )
+  ```
+
+- **Documentation Guides**:
+  - Added end-to-end guides in `README.md` for:
+    - [Using ML Diagnostics for RL (MaxText + Tunix + Pathways)](https://pypi.org/project/google-cloud-mldiagnostics/#user-content-using-ml-diagnostics-for-rl-maxtext--tunix--pathways)
+    - [Using ML Diagnostics with PyTorch on TPU](https://pypi.org/project/google-cloud-mldiagnostics/#user-content-using-ml-diagnostics-with-pytorch-on-tpu)
+    - [Using ML Diagnostics with Cluster Toolkit (CTK)](https://pypi.org/project/google-cloud-mldiagnostics/#user-content-using-ml-diagnostics-with-cluster-toolkit-ctk)
+
 ### v1.0.10
 
 #### Changes
