@@ -91,6 +91,9 @@ class BaseProfilerEngine(abc.ABC):
 class JaxProfilerEngine(BaseProfilerEngine):
   """Profiler engine implementation for JAX framework."""
 
+  def __init__(self):
+    self._server_started = False
+
   def start_trace(self, gcs_dir: str, session_id: str) -> typing.Any:
     import jax  # pylint: disable=g-import-not-at-top
 
@@ -144,11 +147,15 @@ class JaxProfilerEngine(BaseProfilerEngine):
     import jax  # pylint: disable=g-import-not-at-top
 
     jax.profiler.start_server(port)
+    self._server_started = True
 
   def stop_server(self) -> None:
+    if not self._server_started:
+      return
     import jax  # pylint: disable=g-import-not-at-top
 
     jax.profiler.stop_server()
+    self._server_started = False
 
 
 class PyTorchProfilerEngine(BaseProfilerEngine):

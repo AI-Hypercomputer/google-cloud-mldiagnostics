@@ -30,12 +30,9 @@ import requests
 logger = logging.getLogger(__name__)
 
 
-def _generate_self_hosted_run_identifier(
-    workload_id: str, namespace: str, cluster_id: str
-) -> str:
-  """Generates a deterministic UUID matching the Cluster Agent SHA-256 ID."""
-  data = f"{namespace}/{workload_id}/{cluster_id}".encode("utf-8")
-  digest = hashlib.sha256(data).digest()
+def _generate_self_hosted_run_identifier(seed: str) -> str:
+  """Generates a deterministic RFC 4122 v4 UUID from `seed` via SHA-256."""
+  digest = hashlib.sha256(seed.encode("utf-8")).digest()
   byte_arr = bytearray(digest[:16])
   byte_arr[6] = (byte_arr[6] & 0x0F) | 0x40
   byte_arr[8] = (byte_arr[8] & 0x3F) | 0x80
@@ -265,13 +262,6 @@ def machinelearning_run(
   workload_id = run_workload_id
 
   if self_contained:
-    namespace = os.environ.get("POD_NAMESPACE") or "default"
-    workload_id = (
-        run_workload_id
-        or os.environ.get("DIAGON_WORKLOAD_ID")
-        or os.environ.get("WORKLOAD_ID")
-        or name
-    )
     cluster_id = cluster_id or os.environ.get("DIAGON_CLUSTER_ID", "")
     if not cluster_id and agent_url:
       try:
@@ -282,9 +272,36 @@ def machinelearning_run(
         logger.warning(
             "Failed to fetch cluster_id from Diagon Agent (%s); continuing.", e
         )
-    ml_run_id = _generate_self_hosted_run_identifier(
-        workload_id, namespace, cluster_id
-    )
+    slurm_job_id = (os.environ.get("SLURM_JOB_ID") or "").strip()
+    if slurm_job_id:
+      raw_start_time = (os.environ.get("SLURM_JOB_START_TIME") or "").strip()
+      try:
+        slurm_start_time = int(raw_start_time)
+      except ValueError as exc:
+        raise exceptions.MLRunConfigurationError(
+            "SLURM_JOB_START_TIME must be a positive Unix timestamp when"
+            " SLURM_JOB_ID is set."
+        ) from exc
+      if slurm_start_time <= 0:
+        raise exceptions.MLRunConfigurationError(
+            "SLURM_JOB_START_TIME must be a positive Unix timestamp when"
+            " SLURM_JOB_ID is set."
+        )
+      workload_id = slurm_job_id
+      ml_run_id = _generate_self_hosted_run_identifier(
+          f"{slurm_job_id}/{slurm_start_time}/{cluster_id}"
+      )
+    else:
+      namespace = os.environ.get("POD_NAMESPACE") or "default"
+      workload_id = (
+          run_workload_id
+          or os.environ.get("DIAGON_WORKLOAD_ID")
+          or os.environ.get("WORKLOAD_ID")
+          or name
+      )
+      ml_run_id = _generate_self_hosted_run_identifier(
+          f"{namespace}/{workload_id}/{cluster_id}"
+      )
 
   gcs_path = normalize_gcs_path(gcs_path)
 

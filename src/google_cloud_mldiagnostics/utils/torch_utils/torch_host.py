@@ -36,25 +36,31 @@ def get_torch_local_process_index() -> int:
   val = os.environ.get("LOCAL_RANK")
   if val is not None:
     try:
-      return int(val)
+      parsed = int(val)
+      if parsed >= 0:
+        return parsed
     except ValueError:
-      _logger.warning("Invalid integer value for LOCAL_RANK: %r", val)
+      pass
+    _logger.warning("Invalid integer value for LOCAL_RANK: %r", val)
   return 0
 
 
 def is_torch_local_master_process() -> bool:
-  """Checks if the current process is the local master (local rank 0) on this host."""
+  """Checks if the current process is the local master (rank 0) on this host."""
   return get_torch_local_process_index() == 0
 
 
 def get_torch_local_world_size() -> int:
-  """Returns the number of processes on this host for PyTorch (defaults to 1)."""
+  """Returns the host-local world size for PyTorch (defaults to 1)."""
   val = os.environ.get("LOCAL_WORLD_SIZE")
   if val is not None:
     try:
-      return int(val)
+      parsed = int(val)
+      if parsed > 0:
+        return parsed
     except ValueError:
-      _logger.warning("Invalid integer value for LOCAL_WORLD_SIZE: %r", val)
+      pass
+    _logger.warning("Invalid integer value for LOCAL_WORLD_SIZE: %r", val)
   return 1
 
 

@@ -45,6 +45,75 @@ _GKE_WORKLOAD_KIND_MAP = {
 
 _K8S_NAMESPACE_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
 _USER_INJECTED_GKE_DETAILS_KEY = "_user_injected"
+_SLURM_TASK_BLOCK_RE = re.compile(r"^(\d+)(?:\(x(\d+)\))?$")
+
+
+def _parse_non_negative_env_int(env_var: str) -> int | None:
+  """Parses `env_var` as a non-negative integer (>= 0), or returns None."""
+  val = os.environ.get(env_var)
+  if val is None:
+    return None
+  try:
+    parsed = int(val)
+    if parsed >= 0:
+      return parsed
+  except ValueError:
+    pass
+  logger.warning("Invalid non-negative integer value for %s: %r", env_var, val)
+  return None
+
+
+def _parse_positive_env_int(env_var: str) -> int | None:
+  """Parses `env_var` as a positive integer (> 0), or returns None."""
+  val = os.environ.get(env_var)
+  if val is None:
+    return None
+  try:
+    parsed = int(val)
+    if parsed > 0:
+      return parsed
+  except ValueError:
+    pass
+  logger.warning("Invalid positive integer value for %s: %r", env_var, val)
+  return None
+
+
+def _parse_slurm_tasks_per_node(spec: str, node_id: int) -> int | None:
+  """Parses Slurm task-per-node syntax (e.g. '8(x2),4') for `node_id`."""
+  if node_id < 0:
+    return None
+  offset = 0
+  for part in spec.split(","):
+    match = _SLURM_TASK_BLOCK_RE.match(part.strip())
+    if not match:
+      return None
+    count = int(match.group(1))
+    repeat = int(match.group(2)) if match.group(2) is not None else 1
+    if count <= 0 or repeat <= 0:
+      return None
+    if node_id < offset + repeat:
+      return count
+    offset += repeat
+  return None
+
+
+def _parse_slurm_tasks_per_node_env(env_var: str) -> int | None:
+  """Resolves a Slurm tasks-per-node env var for `SLURM_NODEID`."""
+  spec = os.environ.get(env_var)
+  if spec is None:
+    return None
+  raw_node_id = os.environ.get("SLURM_NODEID", "0")
+  try:
+    node_id = int(raw_node_id)
+  except ValueError:
+    node_id = -1
+  if node_id < 0:
+    logger.warning("Invalid integer value for SLURM_NODEID: %r", raw_node_id)
+    return None
+  parsed = _parse_slurm_tasks_per_node(spec, node_id)
+  if parsed is None:
+    logger.warning("Invalid Slurm tasks-per-node %s: %r", env_var, spec)
+  return parsed
 
 
 def _get_in_cluster_namespace() -> str:
@@ -493,9 +562,15 @@ def _slurm_run_identifier(workload_details: dict[str, Any]) -> str:
 # Public functions
 def get_hostname() -> str:
   """Returns hostname or pod name of the current machine."""
-  # HOSTNAME is set in CUSTOM and GKE.
+  # Under Slurm (sbatch + srun), HOSTNAME may be inherited from the BatchHost
+  # across remote task environments, whereas slurmstepd sets SLURMD_NODENAME
+  # to each node's actual hostname. HOSTNAME is set in CUSTOM and GKE.
   # Fallback to socket.gethostname() for non-containerized environments.
-  return os.environ.get("HOSTNAME") or socket.gethostname()
+  return (
+      os.environ.get("SLURMD_NODENAME")
+      or os.environ.get("HOSTNAME")
+      or socket.gethostname()
+  )
 
 
 def get_instance_id() -> str:
@@ -566,22 +641,21 @@ def get_process_index(
       and serving_engine == mlrun_types.ServingEngine.NONE
   ):
     torch_rank = _import_torch_host_module().get_torch_process_index()
-    if torch_rank is not None:
+    if torch_rank is not None and torch_rank >= 0:
       return torch_rank
 
-  # For non-JAX distributed frameworks (like vLLM/PyTorch), check standard env vars.
+  # For non-JAX distributed frameworks (like vLLM/PyTorch), check standard env
+  # vars.
   for env_var in (
       "NODE_RANK",
       "GROUP_RANK",
       "RANK",
       "JOB_COMPLETION_INDEX",
+      "SLURM_PROCID",
   ):
-    val = os.environ.get(env_var)
-    if val is not None:
-      try:
-        return int(val)
-      except ValueError:
-        pass
+    parsed = _parse_non_negative_env_int(env_var)
+    if parsed is not None:
+      return parsed
 
   return 0
 
@@ -678,8 +752,15 @@ def get_local_process_index(
     framework: mlrun_types.Framework = mlrun_types.Framework.JAX,
 ) -> int:
   """Host-local process index; 0 for exactly one process per host."""
-  if framework == mlrun_types.Framework.PYTORCH:
-    return _import_torch_host_module().get_torch_local_process_index()
+  env_vars = (
+      ("LOCAL_RANK", "SLURM_LOCALID")
+      if framework == mlrun_types.Framework.PYTORCH
+      else ("SLURM_LOCALID",)
+  )
+  for env_var in env_vars:
+    parsed = _parse_non_negative_env_int(env_var)
+    if parsed is not None:
+      return parsed
   return 0
 
 
@@ -688,7 +769,22 @@ def get_local_world_size(
 ) -> int:
   """Returns the number of processes sharing the current host."""
   if framework == mlrun_types.Framework.PYTORCH:
-    return _import_torch_host_module().get_torch_local_world_size()
+    parsed = _parse_positive_env_int("LOCAL_WORLD_SIZE")
+    if parsed is not None:
+      return parsed
+
+  for is_spec, env_var in (
+      (True, "SLURM_STEP_TASKS_PER_NODE"),
+      (False, "SLURM_NTASKS_PER_NODE"),
+      (True, "SLURM_TASKS_PER_NODE"),
+  ):
+    parsed = (
+        _parse_slurm_tasks_per_node_env(env_var)
+        if is_spec
+        else _parse_positive_env_int(env_var)
+    )
+    if parsed is not None:
+      return parsed
   return 1
 
 
