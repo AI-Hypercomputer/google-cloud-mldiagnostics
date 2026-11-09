@@ -387,6 +387,15 @@ class Xprof:
   def _ensure_initialized(self):
     """Lazy initialization - resolve run and setup directories when needed."""
     if self._initialized:
+      if self._resolved_run is not None:
+        global_manager.ensure_run_synced(max_attempts=2, initial_delay_sec=0.0)
+        refreshed_dir = global_manager.get_profile_base_dir(self._resolved_run)
+        if refreshed_dir != self._gcs_profile_dir:
+          self._gcs_profile_dir = refreshed_dir
+          logger.info(
+              "xprof refreshed profiling output path to: %s",
+              self._gcs_profile_dir,
+          )
       return
 
     # Resolve the run now (at usage time, not construction time)
@@ -401,6 +410,8 @@ class Xprof:
           "No active ML run found for profiling. Please initialize an ML run"
           " or provide a valid ML run with a configured GCS path."
       )
+
+    global_manager.ensure_run_synced(max_attempts=2, initial_delay_sec=0.0)
 
     if self._resolved_run.gcs_path is None:
       raise exceptions.ProfilingError(

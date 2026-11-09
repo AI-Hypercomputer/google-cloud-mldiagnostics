@@ -22,7 +22,7 @@ import logging
 import pprint
 import random
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Protocol
 
 import google.auth
 from google.auth.transport import requests as google_auth_requests
@@ -123,6 +123,79 @@ def _extract_run_id_from_error(err: Exception) -> Optional[str]:
   except Exception as e:
     logger.debug("Failed to extract run ID from error string: %s", e)
   return None
+
+
+
+class ControlPlaneClientProtocol(Protocol):
+  """Protocol defining the interface for control plane clients."""
+
+  def create_ml_run(
+      self,
+      name: str,
+      display_name: str,
+      run_phase: Any,
+      configs: Any = None,
+      tools: Any = None,
+      artifacts: Any = None,
+      run_group: Any = None,
+      labels: Any = None,
+      orchestrator: Any = None,
+      workload_details: Any = None,
+      workload_targets: Any = None,
+  ) -> Any:
+    ...
+
+  def update_ml_run(
+      self,
+      name: str,
+      force: bool = False,
+      run_phase: Any = None,
+      *,
+      display_name: Any = None,
+      tools: Any = None,
+      artifacts: Any = None,
+      labels: Any = None,
+      configs: Any = None,
+      workload_targets: Any = None,
+      update_mask: str = "*",
+  ) -> Any:
+    ...
+
+  def resolve_active_ml_run(
+      self,
+      mlrun: mlrun_types.MLRun | None,
+      *,
+      hostname: str | None = None,
+      max_attempts: int = _GKE_RESOLVE_MAX_ATTEMPTS,
+      initial_delay_sec: float = _GKE_RESOLVE_INITIAL_DELAY_SEC,
+      base_delay_sec: float = _GKE_RESOLVE_BASE_DELAY_SEC,
+      max_delay_sec: float = _GKE_RESOLVE_MAX_DELAY_SEC,
+  ) -> dict[str, Any] | None:
+    ...
+
+  def create_profiler_session(
+      self,
+      ml_run_id: str,
+      profiler_session_id: str,
+      gsc_file_path: str,
+      profiler_target: str,
+      start_time: float,
+      end_time: float | None,
+      session_phase: str,
+  ) -> Any:
+    ...
+
+  def update_profiler_session(
+      self,
+      ml_run_id: str,
+      profiler_session_id: str,
+      gsc_file_path: str,
+      profiler_target: str,
+      start_time: float,
+      end_time: float | None,
+      session_phase: str,
+  ) -> Any:
+    ...
 
 
 class ControlPlaneClient:
@@ -850,6 +923,58 @@ class ControlPlaneClient:
         " attempts; proceeding with local run ID.",
         max_attempts,
     )
+    return None
+
+  def resolve_active_ml_run(
+      self,
+      mlrun: mlrun_types.MLRun | None,
+      *,
+      hostname: str | None = None,
+      max_attempts: int = _GKE_RESOLVE_MAX_ATTEMPTS,
+      initial_delay_sec: float = _GKE_RESOLVE_INITIAL_DELAY_SEC,
+      base_delay_sec: float = _GKE_RESOLVE_BASE_DELAY_SEC,
+      max_delay_sec: float = _GKE_RESOLVE_MAX_DELAY_SEC,
+  ) -> dict[str, Any] | None:
+    """Resolves an active ML run from the control plane using read-only queries.
+
+    Polymorphic entrypoint matching SelfHostedDiagonServiceClient.
+
+    Args:
+        mlrun: The active MLRun instance.
+        hostname: Optional local pod/instance hostname.
+        max_attempts: Maximum number of polling attempts.
+        initial_delay_sec: Initial jittered delay before the first poll attempt.
+        base_delay_sec: Base backoff delay in seconds between attempts.
+        max_delay_sec: Maximum backoff delay in seconds between attempts.
+
+    Returns:
+        The resolved ML run dictionary if found, or None if the run is non-GKE,
+        workload details are missing or invalid, creation-timestamp is already
+        populated, or no active run matches within the retry budget.
+    """
+    if mlrun is None:
+      return None
+    workload_details = mlrun.workload_details
+    if not isinstance(workload_details, Mapping):
+      return None
+    orchestrator = mlrun.orchestrator
+    is_gke = orchestrator == mlrun_types.Orchestrator.GKE or (
+        orchestrator is None
+        and host_utils.is_gke_workload_details(workload_details)
+    )
+    if is_gke:
+      # If creation-timestamp is already populated, the deterministic run name
+      # is identical across all hosts and does not require resolution.
+      if workload_details.get("creation-timestamp"):
+        return None
+      return self.resolve_active_gke_ml_run(
+          workload_details,
+          hostname=hostname,
+          max_attempts=max_attempts,
+          initial_delay_sec=initial_delay_sec,
+          base_delay_sec=base_delay_sec,
+          max_delay_sec=max_delay_sec,
+      )
     return None
 
   def _list_active_gke_ml_run(

@@ -17,7 +17,9 @@
 import datetime
 import hashlib
 import logging
+import random
 import threading
+import time
 from typing import Any
 import urllib.parse
 import uuid
@@ -31,6 +33,19 @@ _RUN_PHASE_TO_WORKLOAD_STATE = {
     mlrun_types.RunPhase.PHASE_COMPLETED.value: "STATE_SUCCEEDED",
     mlrun_types.RunPhase.PHASE_FAILED.value: "STATE_FAILED",
 }
+
+_ACTIVE_WORKLOAD_STATES = frozenset({
+    "STATE_PENDING",
+    "STATE_RUNNING",
+    "STATE_ACTIVE",
+    "ACTIVE",
+})
+
+_SELF_HOSTED_RESOLVE_MAX_ATTEMPTS = 8
+_SELF_HOSTED_RESOLVE_INITIAL_DELAY_SEC = 1.0
+_SELF_HOSTED_RESOLVE_BASE_DELAY_SEC = 1.0
+_SELF_HOSTED_RESOLVE_MAX_DELAY_SEC = 16.0
+_MAX_PAGES_PER_RESOLVE_ATTEMPT = 5
 
 _SESSION_PHASE_TO_STATES = {
     "ACTIVE": ("STATE_ACTIVE", "STATE_RUNNING"),
@@ -51,6 +66,11 @@ def _format_timestamp(timestamp: float) -> str:
   ).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _escape_filter_value(value: Any) -> str:
+  """Escapes backslashes and double quotes for AIP-160 filter literals."""
+  return str(value).replace("\\", "\\\\").replace('"', '\\"')
+
+
 class SelfHostedDiagonServiceClient:
   """REST client for synchronizing MLRun metadata with a self-hosted control plane.
 
@@ -58,9 +78,13 @@ class SelfHostedDiagonServiceClient:
   profiler session metadata.
 
   API Contract:
-    - MLRuns Endpoint: Expose `PATCH /v1/machineLearningRuns/{run_id}`.
-      Creations are processed as upserts via `allow_missing=true` and updates
-      via the `update_mask` query parameter.
+    - MLRuns Query Endpoint: Expose `GET /v1/machineLearningRuns`.
+      Supports `filter` (e.g. `cluster_id="..." logical_id="..."`), `page_size`,
+      and `page_token` query parameters for read-only active run resolution.
+    - MLRuns Upsert/Update Endpoint: Expose
+      `PATCH /v1/machineLearningRuns/{run_id}`. Creations are processed as
+      upserts via `allow_missing=true` and updates via the `update_mask` query
+      parameter.
     - ProfilerSessions Endpoints: Expose
       `POST /v1/machineLearningRuns/{run_id}/profilerSessions` for creation and
       `PATCH /v1/machineLearningRuns/{run_id}/profilerSessions/{session_id}`
@@ -172,7 +196,6 @@ class SelfHostedDiagonServiceClient:
         labels,
         orchestrator,
         workload_targets,
-        run_phase,
     )
     workload_details = workload_details or {}
     workload_id = workload_details.get("id", "")
@@ -181,17 +204,14 @@ class SelfHostedDiagonServiceClient:
           "workload_details must contain a valid 'id' to create an ML Run."
       )
 
-    body: dict[str, Any] = {
-        "logicalId": name,
+    run_phase_str = (
+        str(run_phase.value) if hasattr(run_phase, "value") else str(run_phase)
+    )
+    state = _RUN_PHASE_TO_WORKLOAD_STATE.get(run_phase_str)
+    workload_body: dict[str, Any] = {
+        "workloadId": workload_id,
         "displayName": display_name,
-        "creator": "CREATOR_MANUAL",
-        "clusterId": self.cluster_id,
-        "workload": {
-            "workloadId": workload_id,
-            "displayName": display_name,
-        },
     }
-
     update_mask_fields = [
         "display_name",
         "creator",
@@ -200,6 +220,17 @@ class SelfHostedDiagonServiceClient:
         "workload.display_name",
         "logical_id",
     ]
+    if state is not None:
+      workload_body["state"] = state
+      update_mask_fields.append("workload.state")
+
+    body: dict[str, Any] = {
+        "logicalId": name,
+        "displayName": display_name,
+        "creator": "CREATOR_MANUAL",
+        "clusterId": self.cluster_id,
+        "workload": workload_body,
+    }
 
     if artifacts and artifacts.get("gcsPath"):
       body["baseBlobPath"] = artifacts["gcsPath"]
@@ -213,6 +244,113 @@ class SelfHostedDiagonServiceClient:
         update_mask=created_update_mask,
         allow_missing=True,
     )
+
+  def resolve_active_ml_run(
+      self,
+      mlrun: mlrun_types.MLRun | str | None,
+      *,
+      hostname: str | None = None,
+      max_attempts: int = _SELF_HOSTED_RESOLVE_MAX_ATTEMPTS,
+      initial_delay_sec: float = _SELF_HOSTED_RESOLVE_INITIAL_DELAY_SEC,
+      base_delay_sec: float = _SELF_HOSTED_RESOLVE_BASE_DELAY_SEC,
+      max_delay_sec: float = _SELF_HOSTED_RESOLVE_MAX_DELAY_SEC,
+  ) -> dict[str, Any] | None:
+    """Resolves an active self-hosted MLRun by logical_id using read-only queries.
+
+    Args:
+        mlrun: The active MLRun instance or logical ID string.
+        hostname: Optional local pod/instance hostname (unused in self-hosted).
+        max_attempts: Maximum number of polling attempts.
+        initial_delay_sec: Initial jittered delay before the first poll attempt.
+        base_delay_sec: Base backoff delay in seconds between attempts.
+        max_delay_sec: Maximum backoff delay in seconds between attempts.
+
+    Returns:
+        The resolved ML run dictionary if found, or None if the logical ID is
+        empty, no active run matches within the retry budget, or the control
+        plane is unreachable.
+    """
+    del hostname
+    if mlrun is None:
+      return None
+    raw_logical_id = mlrun if isinstance(mlrun, str) else mlrun.name
+    clean_logical_id = raw_logical_id.strip()
+    if not clean_logical_id:
+      return None
+
+    if initial_delay_sec > 0:
+      time.sleep(initial_delay_sec * (0.5 + 0.5 * random.random()))
+
+    delay = base_delay_sec
+    url = f"{self.control_plane_url}/v1/machineLearningRuns"
+    base_params: dict[str, str] = {"page_size": "100"}
+    filter_parts = []
+    if self.cluster_id:
+      escaped_cluster_id = _escape_filter_value(self.cluster_id)
+      filter_parts.append(f'cluster_id="{escaped_cluster_id}"')
+    escaped_logical_id = _escape_filter_value(clean_logical_id)
+    filter_parts.append(f'logical_id="{escaped_logical_id}"')
+    base_params["filter"] = " ".join(filter_parts)
+
+    for attempt in range(max_attempts):
+      try:
+        page_token = ""
+        pages_scanned = 0
+        seen_tokens = set()
+        while pages_scanned < _MAX_PAGES_PER_RESOLVE_ATTEMPT:
+          pages_scanned += 1
+          params = dict(base_params)
+          if page_token:
+            params["page_token"] = page_token
+            seen_tokens.add(page_token)
+          response = self.session.get(url, params=params, timeout=5)
+          response.raise_for_status()
+          payload = response.json()
+          if not isinstance(payload, dict):
+            break
+          runs = payload.get("machineLearningRuns") or []
+          for run in runs:
+            if not isinstance(run, dict):
+              continue
+            if run.get("logicalId") != clean_logical_id:
+              continue
+            if (
+                self.cluster_id
+                and run.get("clusterId")
+                and run.get("clusterId") != self.cluster_id
+            ):
+              continue
+            workload = run.get("workload")
+            state = (
+                workload.get("state", "") if isinstance(workload, dict) else ""
+            )
+            if state in _ACTIVE_WORKLOAD_STATES:
+              return run
+          next_token = str(payload.get("nextPageToken") or "").strip()
+          if not next_token or next_token in seen_tokens:
+            break
+          page_token = next_token
+      except (requests.RequestException, ValueError) as e:
+        logger.warning(
+            "Transient error resolving self-hosted ML run %r (attempt %d/%d):"
+            " %s",
+            clean_logical_id,
+            attempt + 1,
+            max_attempts,
+            e,
+        )
+
+      if attempt + 1 < max_attempts:
+        time.sleep(delay * (0.5 + 0.5 * random.random()))
+        delay = min(delay * 2, max_delay_sec)
+
+    logger.warning(
+        "Could not resolve active self-hosted ML run %r from control plane"
+        " after %s attempts; proceeding with local run ID.",
+        clean_logical_id,
+        max_attempts,
+    )
+    return None
 
   def update_ml_run(
       self,

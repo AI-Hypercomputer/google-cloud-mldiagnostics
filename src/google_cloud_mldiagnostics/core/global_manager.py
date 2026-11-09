@@ -43,20 +43,6 @@ _GKE_RESPONSE_FIELD_MAP = (
 )
 
 
-def _should_sync_gke_run_on_worker(
-    mlrun: mlrun_types.MLRun, self_contained: bool
-) -> bool:
-  """Returns True if a non-master GKE worker host must sync its canonical run ID."""
-  return (
-      not self_contained
-      and mlrun.orchestrator == mlrun_types.Orchestrator.GKE
-      and host_utils.is_local_master_process(mlrun.framework)
-      and isinstance(mlrun.workload_details, dict)
-      and "creation-timestamp" in mlrun.workload_details
-      and not mlrun.workload_details.get("creation-timestamp")
-  )
-
-
 def _merge_workload_details_from_response(
     existing_details: Mapping[str, Any] | None,
     resp_workload_details: Mapping[str, Any],
@@ -117,11 +103,14 @@ class GlobalRunManager:
           cls._instance._metrics_exporter = None
           cls._instance._logs_exporter = None
           cls._instance._resource_attributes = None
-          cls._instance._control_plane_client: Optional[  # pyrefly: ignore[bad-assignment]
+          cls._instance._control_plane_client: (  # pyrefly: ignore[bad-assignment]
               control_plane_client.ControlPlaneClient
-          ] = None
+              | self_hosted_diagon_service_client.SelfHostedDiagonServiceClient
+              | None
+          ) = None
           cls._instance._timer_ps_creation: threading.Timer | None = None  # pyrefly: ignore[bad-assignment]
           cls._instance._ps_creation_start_time: float | None = None  # pyrefly: ignore[bad-assignment]
+          cls._instance._run_synced: bool = False  # pyrefly: ignore[bad-assignment]
     return cls._instance
 
   def __init__(
@@ -144,12 +133,14 @@ class GlobalRunManager:
       self._metrics_exporter: Optional[base_exporter.BaseMetricsExporter] = None
       self._logs_exporter: Optional[base_exporter.BaseLogsExporter] = None
       self._resource_attributes: Optional[Dict[str, Any]] = None
-      self._control_plane_client: Optional[
+      self._control_plane_client: (
           control_plane_client.ControlPlaneClient
           | self_hosted_diagon_service_client.SelfHostedDiagonServiceClient
-      ] = None
+          | None
+      ) = None
       self._timer_ps_creation: threading.Timer | None = None
       self._ps_creation_start_time: float | None = None
+      self._run_synced: bool = False
 
     if not hasattr(self, "_accelerator_type") or accelerator_type is not None:
       self._accelerator_type = (
@@ -171,6 +162,7 @@ class GlobalRunManager:
         )
 
       self._ml_run = mlrun
+      self._run_synced = False
       if self._accelerator_type == metric_types.AcceleratorType.UNKNOWN:
         self._accelerator_type = host_utils.get_accelerator_type(
             mlrun.framework, mlrun.serving_engine
@@ -192,12 +184,13 @@ class GlobalRunManager:
         )
 
       is_master = True
+      is_local_master = host_utils.is_local_master_process(mlrun.framework)
       if (
-          mlrun.orchestrator == mlrun_types.Orchestrator.GKE
+          (mlrun.orchestrator == mlrun_types.Orchestrator.GKE or self_contained)
           and not host_utils.is_master_host(
               mlrun.framework, mlrun.serving_engine
           )
-          or not host_utils.is_local_master_process(mlrun.framework)
+          or not is_local_master
       ):
         logger.info(
             "Skipping ML run initialization on control plane (run_group=%s,"
@@ -206,8 +199,10 @@ class GlobalRunManager:
             mlrun.name,
         )
         is_master = False
-        if _should_sync_gke_run_on_worker(mlrun, self_contained):
-          self._sync_gke_run_from_control_plane(mlrun)
+        if not self._is_run_sync_needed(mlrun):
+          self._run_synced = True
+        elif is_local_master:
+          self._sync_run_from_control_plane(mlrun)
       else:
         self._create_ml_run_on_control_plane(mlrun)
 
@@ -413,11 +408,12 @@ class GlobalRunManager:
       resp_id = resp_name.strip("/").split("/")[-1]
       if resp_id:
         self._ml_run.name = resp_id
-        if bool(self._ml_run.control_plane_url):
+        if self._ml_run.control_plane_url:
           self._ml_run.ml_run_id = resp_id
+        self._run_synced = True
         self._sync_exporters_run_id(resp_id)
 
-    if bool(self._ml_run.control_plane_url) and response.get("clusterId"):
+    if self._ml_run.control_plane_url and response.get("clusterId"):
       self._ml_run.cluster_id = response["clusterId"]
 
     resp_workload_details = response.get("workloadDetails")
@@ -426,23 +422,65 @@ class GlobalRunManager:
           self._ml_run.workload_details, resp_workload_details
       )
 
-  def _sync_gke_run_from_control_plane(
+  def _is_run_sync_needed(self, mlrun: mlrun_types.MLRun) -> bool:
+    """Returns True if the ML run requires resolution from the control plane."""
+    if self._control_plane_client is None:
+      return False
+    if mlrun.control_plane_url:
+      return True
+    workload_details = mlrun.workload_details
+    if not isinstance(workload_details, Mapping):
+      return False
+    orchestrator = mlrun.orchestrator
+    is_gke = orchestrator == mlrun_types.Orchestrator.GKE or (
+        orchestrator is None
+        and host_utils.is_gke_workload_details(workload_details)
+    )
+    if not is_gke:
+      return False
+    return not bool(workload_details.get("creation-timestamp"))
+
+  def _sync_run_from_control_plane(
       self, mlrun: mlrun_types.MLRun, **resolve_kwargs: Any
   ) -> None:
-    """Synchronizes canonical GKE run details from the control plane."""
+    """Synchronizes canonical ML run details from the control plane."""
+    if self._control_plane_client is None:
+      self._run_synced = True
+      return
+    if not self._is_run_sync_needed(mlrun):
+      self._run_synced = True
+      return
     try:
-      response = self._control_plane_client.resolve_active_gke_ml_run(  # pyrefly: ignore[missing-attribute]
-          mlrun.workload_details,
+      response = self._control_plane_client.resolve_active_ml_run(
+          mlrun,
           hostname=host_utils.get_hostname(),
           **resolve_kwargs,
       )
       if response:
         self._update_ml_run_from_response(response)
-        logger.info(
-            "Synchronized GKE ML run from control plane: %s", mlrun.name
-        )
+        logger.info("Synchronized ML run from control plane: %s", mlrun.name)
     except requests.exceptions.RequestException as e_sync:
-      logger.warning("Failed to sync GKE ML run from control plane: %s", e_sync)
+      logger.warning("Failed to sync ML run from control plane: %s", e_sync)
+
+  def ensure_run_synced(
+      self,
+      max_attempts: int | None = None,
+      initial_delay_sec: float | None = None,
+  ) -> None:
+    """Ensures that the active ML run ID is synchronized with the control plane.
+
+    Guarded by ``self._lock`` and ``self._run_synced``. If the run is not yet
+    synchronized, polls the control plane client to resolve the canonical ID.
+    """
+    with self._lock:
+      if self._run_synced or self._ml_run is None:
+        return
+      resolve_kwargs: dict[str, Any] = {}
+      if max_attempts is not None:
+        resolve_kwargs["max_attempts"] = max_attempts
+      if initial_delay_sec is not None:
+        resolve_kwargs["initial_delay_sec"] = initial_delay_sec
+      self._sync_run_from_control_plane(self._ml_run, **resolve_kwargs)
 
   def _create_ml_run_on_control_plane(self, mlrun: mlrun_types.MLRun) -> None:
     """Helper to call create_ml_run on control plane client."""
@@ -635,6 +673,8 @@ class GlobalRunManager:
           return
 
         hostname = host_utils.get_hostname()
+        if not self._run_synced:
+          self.ensure_run_synced(max_attempts=2, initial_delay_sec=0.0)
         if isinstance(
             client,
             self_hosted_diagon_service_client.SelfHostedDiagonServiceClient,
@@ -643,12 +683,6 @@ class GlobalRunManager:
           base_dir = get_profile_base_dir(self._ml_run)
           profile_path = f"{base_dir}/plugins/profile/{session_id}"
         else:
-          if _should_sync_gke_run_on_worker(
-              self._ml_run, bool(self._ml_run.control_plane_url)
-          ):
-            self._sync_gke_run_from_control_plane(
-                self._ml_run, max_attempts=2, initial_delay_sec=0.0
-            )
           profiler_target = _find_profiler_target(
               self._ml_run.workload_details, hostname
           )
@@ -832,10 +866,11 @@ class GlobalRunManager:
   @property
   def control_plane_client(
       self,
-  ) -> Optional[
+  ) -> (
       control_plane_client.ControlPlaneClient
       | self_hosted_diagon_service_client.SelfHostedDiagonServiceClient
-  ]:
+      | None
+  ):
     """Get the current control plane client."""
     with self._lock:
       if self._ml_run and host_utils.is_master_host(
@@ -860,6 +895,7 @@ class GlobalRunManager:
         self._timer_ps_creation.cancel()
         self._timer_ps_creation = None
       self._ps_creation_start_time = None
+      self._run_synced = False
       self._ml_run = None
       self._resource_attributes = None
       self._current_logging_client = None
@@ -956,3 +992,13 @@ def get_profile_base_dir(mlrun: mlrun_types.MLRun) -> str:
   if mlrun.control_plane_url and mlrun.cluster_id:
     return f"{base_path}/{mlrun.cluster_id}/{mlrun.name}"
   return f"{base_path}/{mlrun.name}"
+
+
+def ensure_run_synced(
+    max_attempts: int | None = None,
+    initial_delay_sec: float | None = None,
+) -> None:
+  """Ensures that the active ML run ID is synchronized with the control plane."""
+  get_global_run_manager().ensure_run_synced(
+      max_attempts=max_attempts, initial_delay_sec=initial_delay_sec
+  )
