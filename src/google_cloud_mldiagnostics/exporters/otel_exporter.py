@@ -17,8 +17,8 @@
 
 from collections.abc import Mapping, Sequence
 import logging
+import numbers
 import time
-
 from typing import Any
 
 from google_cloud_mldiagnostics.exporters import base_exporter
@@ -133,6 +133,46 @@ class OTelMetricsExporter(base_exporter.BaseMetricsExporter):
         raise e
     return self._meter
 
+  def _inject_resource_dimensions(self, attributes: dict[str, Any]) -> None:
+    """Injects run-level resource dimensions for localized Prometheus."""
+    run_id = self.resource_attributes.get("run_id")
+    if run_id is not None:
+      attributes["node_id"] = run_id
+    location = self.resource_attributes.get("location")
+    if location is not None:
+      attributes["location"] = location
+
+  def _set_gauge(
+      self,
+      meter: Any,
+      name: str,
+      value: int | float,
+      attributes: dict[str, Any],
+  ) -> None:
+    """Lazily creates and caches a Gauge instrument and sets its value."""
+    instrument = self._instruments.get(name)
+    if instrument is None:
+      try:
+        instrument = meter.create_gauge(name=name)
+        self._instruments[name] = instrument
+      except Exception as e:
+        logger.exception(
+            "Failed to create OTel instrument for %s: %s", name, e
+        )
+        return
+
+    try:
+      logger.debug(
+          "OTelMetricsExporter: Setting value %s for instrument %s",
+          value,
+          name,
+      )
+      instrument.set(value, attributes=attributes)
+    except Exception as e:
+      logger.exception(
+          "Failed to set value for OTel instrument %s: %s", name, e
+      )
+
   def export(self, batch: Sequence[base_exporter.MetricPoint]) -> None:
     """Exports a batch of metric points to OpenTelemetry.
 
@@ -151,6 +191,7 @@ class OTelMetricsExporter(base_exporter.BaseMetricsExporter):
       # Skip export if OTel is not available
       return
 
+    latest_step: int | None = None
     for point in batch:
       # CRITICAL Performance Optimization: Strictly process MetricPoint.
       # If by any chance a dictionary lands here, skip it gracefully.
@@ -164,69 +205,26 @@ class OTelMetricsExporter(base_exporter.BaseMetricsExporter):
 
       attributes: dict[str, Any] = dict(point.labels) if point.labels else {}
       attributes.pop("step", None)  # Ensure step is not in labels
+      self._inject_resource_dimensions(attributes)
+      self._set_gauge(meter, point.name, point.value, attributes)
 
-      # Inject node_id for explicit dimension tagging in localized Prometheus
-      if hasattr(self, "resource_attributes") and self.resource_attributes:
-        if "run_id" in self.resource_attributes:
-          attributes["node_id"] = self.resource_attributes["run_id"]
-        if "location" in self.resource_attributes:
-          attributes["location"] = self.resource_attributes["location"]
-
-      instrument = self._instruments.get(point.name)
-      if instrument is None:
-        try:
-          # Assuming standard Gauge for MetricPoint as it represents a point in time value.
-          # We cache instruments by name.
-          instrument = meter.create_gauge(name=point.name)
-          self._instruments[point.name] = instrument
-        except Exception as e:
-          logger.exception(
-              "Failed to create OTel instrument for %s: %s", point.name, e
-          )
-          continue
-
-      try:
-        # OTel Gauge takes value and optional attributes.
-
-        # Merge with resource attributes if needed, but usually resource attributes
-        # are handled by the MeterProvider/Resource.
-        # We can add them as metric attributes if explicitly desired.
-
-        logger.debug(
-            "OTelMetricsExporter: Setting value %s for instrument %s",
-            point.value,
-            point.name,
-        )
-        instrument.set(point.value, attributes=attributes)
-      except Exception as e:
-        logger.exception(
-            "Failed to set value for OTel instrument %s: %s", point.name, e
-        )
-
-      # Emit dedicated training_step metric
       if point.step is not None:
-        training_step_instrument = self._instruments.get("training_step")
-        if training_step_instrument is None:
-          try:
-            training_step_instrument = meter.create_gauge(name="training_step")
-            self._instruments["training_step"] = training_step_instrument
-          except Exception as e:
-            logger.exception(
-                "Failed to create OTel instrument for training_step: %s", e
-            )
+        if isinstance(point.step, numbers.Integral) and not isinstance(
+            point.step, bool
+        ):
+          latest_step = int(point.step)
+        else:
+          logger.warning(
+              "Skipping non-integer metric step: name=%s, type=%s",
+              point.name,
+              type(point.step),
+          )
 
-        if training_step_instrument is not None:
-          try:
-            logger.debug(
-                "OTelMetricsExporter: Setting value %s for instrument"
-                " training_step",
-                point.step,
-            )
-            training_step_instrument.set(point.step, attributes=attributes)
-          except Exception as e:
-            logger.exception(
-                "Failed to set value for OTel instrument training_step: %s", e
-            )
+    # Emit dedicated run-scoped training_step metric once per batch.
+    if latest_step is not None:
+      step_attributes: dict[str, Any] = {"unit": "1"}
+      self._inject_resource_dimensions(step_attributes)
+      self._set_gauge(meter, "training_step", latest_step, step_attributes)
 
 
 class OTelLogsExporter(base_exporter.BaseLogsExporter):
