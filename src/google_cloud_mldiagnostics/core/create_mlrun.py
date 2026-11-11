@@ -147,6 +147,10 @@ def initialize_mlrun(
   self_contained = bool(base_url)
 
   if not self_contained:
+    if region is None and isinstance(workload_details, Mapping):
+      cluster_path = workload_details.get("cluster")
+      if isinstance(cluster_path, str) and "/" in cluster_path:
+        region = gcp.extract_region_from_location(cluster_path)
     if region is None:
       region = gcp.get_instance_region()
     gcp.validate_region(region)

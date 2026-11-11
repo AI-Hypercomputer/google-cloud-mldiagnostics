@@ -121,7 +121,7 @@ def machinelearning_run(
     base_url: str | None = None,
     cluster_id: str | None = None,
     project: str | None = None,
-    region: str | None = "us-central1",
+    region: str | None = None,
     metrics_record_interval_sec: float = 10.0,
     on_demand_xprof: bool = False,
     log_system_metrics: bool = False,
@@ -156,7 +156,8 @@ def machinelearning_run(
       base_url: Optional URL for the self-hosted Diagon Control Plane.
       cluster_id: Optional cluster identifier for self-hosted runs.
       project: The Google Cloud project ID.
-      region: The Google Cloud region. Default is us-central1.
+      region: The Google Cloud region. If None, auto-detected from the GCP
+        environment.
       metrics_record_interval_sec: The interval in seconds for recording system
         metrics backend (tpu duty cycle, tpu tensorcore utilization, hbm
         utilization, host cpu utilization, host memory utilization).

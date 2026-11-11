@@ -14,11 +14,125 @@
 
 """Utility functions for GCP related operations."""
 
+import json
 import logging
+import os
 import re
+import subprocess
 import textwrap
 import urllib.error
 import urllib.request
+
+_REGION_REGEX = re.compile(
+    textwrap.dedent("""\
+        [a-z]+          # Prefix (e.g., 'us', 'europe')
+        (-[a-z]+)*      # Optional middle parts (e.g., '-central', '-gov-west')
+        -[a-z]+         # Name part (e.g., '-west', '-east')
+        [0-9]+          # Number part (e.g., '1', '3')
+    """),
+    re.VERBOSE,
+)
+_ZONE_REGEX = re.compile(
+    textwrap.dedent("""\
+        [a-z]+          # Prefix
+        (-[a-z]+)*      # Optional middle parts
+        -[a-z]+         # Name part
+        [0-9]+          # Number part (e.g., '1')
+        -[a-z]+         # Zone suffix (e.g., '-a', '-b')
+    """),
+    re.VERBOSE,
+)
+_LOCATION_PATH_REGEX = re.compile(
+    r"(?:^|/)(?:locations|zones|regions)/([^/\s]+)"
+)
+_REGION_ENV_VARS = (
+    "CLOUD_ML_REGION",
+    "GOOGLE_CLOUD_REGION",
+    "CLOUDSDK_COMPUTE_REGION",
+    "REGION",
+)
+_ZONE_ENV_VARS = (
+    "CLOUDSDK_COMPUTE_ZONE",
+    "ZONE",
+)
+
+
+def extract_region_from_location(location: str | None) -> str | None:
+  """Extracts and normalizes a GCP region from a region, zone, or resource path.
+
+  Args:
+      location: A region (e.g. 'us-central1'), zone (e.g. 'us-central1-a'), or
+        GCP resource path (e.g.
+        'projects/p/locations/us-central1-a/clusters/c').
+
+  Returns:
+      The normalized region string (e.g. 'us-central1') if valid, otherwise
+      None.
+  """
+  if not isinstance(location, str):
+    return None
+  candidate = location.strip()
+
+  match = _LOCATION_PATH_REGEX.search(candidate)
+  if match:
+    candidate = match.group(1)
+
+  if _REGION_REGEX.fullmatch(candidate):
+    return candidate
+  if _ZONE_REGEX.fullmatch(candidate):
+    return "-".join(candidate.split("-")[:-1])
+  return None
+
+
+def _get_region_from_env() -> str | None:
+  """Resolves the GCP region from environment variables or GKE metadata."""
+  for env_var in _REGION_ENV_VARS + _ZONE_ENV_VARS:
+    region = extract_region_from_location(os.environ.get(env_var))
+    if region:
+      return region
+
+  diagon_id_raw = os.environ.get("GKE_DIAGON_IDENTIFIER")
+  if diagon_id_raw:
+    try:
+      diagon_id = json.loads(diagon_id_raw)
+      if isinstance(diagon_id, dict):
+        loc_val = diagon_id.get("location")
+        if isinstance(loc_val, str):
+          region = extract_region_from_location(loc_val)
+          if region:
+            return region
+        cluster_val = diagon_id.get("clustername")
+        if isinstance(cluster_val, str) and "/" in cluster_val:
+          region = extract_region_from_location(cluster_val)
+          if region:
+            return region
+    except (json.JSONDecodeError, TypeError, ValueError):
+      # Ignore malformed JSON or unexpected schema in env var; fall through.
+      pass
+
+  return None
+
+
+def _get_gcloud_region(timeout: int = 5) -> str | None:
+  """Resolves the GCP region from gcloud CLI configuration."""
+  for prop in ("compute/region", "compute/zone"):
+    try:
+      proc = subprocess.run(
+          ["gcloud", "config", "get-value", prop],
+          capture_output=True,
+          text=True,
+          timeout=timeout,
+          check=False,
+      )
+      if proc.returncode == 0 and proc.stdout:
+        for line in reversed(proc.stdout.splitlines()):
+          region = extract_region_from_location(line)
+          if region:
+            return region
+    except (OSError, subprocess.SubprocessError, ValueError):
+      # gcloud CLI unavailable, timed out, or misconfigured; try next property.
+      continue
+  return None
 
 
 def get_project_id(timeout: int = 5) -> str | None:
@@ -87,7 +201,7 @@ def get_instance_zone(timeout: int = 5) -> str | None:
 
 
 def get_instance_region(timeout: int = 5) -> str | None:
-  """Get the GCE instance region from the metadata server.
+  """Get the GCP region from environment, GKE/GCE metadata, or gcloud config.
 
   Args:
       timeout: Request timeout in seconds (default: 5)
@@ -95,12 +209,29 @@ def get_instance_region(timeout: int = 5) -> str | None:
   Returns:
       Region name (e.g., 'us-central1') if successful, None if failed
   """
+  env_region = _get_region_from_env()
+  if env_region:
+    return env_region
+
+  if os.environ.get("KUBERNETES_SERVICE_HOST"):
+    cluster_location = get_instance_attribute(
+        "cluster-location", timeout=timeout
+    )
+    region = extract_region_from_location(cluster_location)
+    if region:
+      return region
+
   zone = get_instance_zone(timeout)
   if zone:
     # Extract region from zone (e.g., 'us-central1-a' -> 'us-central1')
     parts = zone.split("-")
     if len(parts) >= 3:
       return "-".join(parts[:-1])
+
+  gcloud_region = _get_gcloud_region(timeout=timeout)
+  if gcloud_region:
+    return gcloud_region
+
   return None
 
 
@@ -142,27 +273,6 @@ def get_tpu_accelerator_type(timeout: int = 5) -> str | None:
       return mt
 
   return None
-
-
-_REGION_REGEX = re.compile(
-    textwrap.dedent("""\
-        [a-z]+          # Prefix (e.g., 'us', 'europe')
-        (-[a-z]+)*      # Optional middle parts (e.g., '-central', '-gov-west')
-        -[a-z]+         # Name part (e.g., '-west', '-east')
-        [0-9]+          # Number part (e.g., '1', '3')
-    """),
-    re.VERBOSE,
-)
-_ZONE_REGEX = re.compile(
-    textwrap.dedent("""\
-        [a-z]+          # Prefix
-        (-[a-z]+)*      # Optional middle parts
-        -[a-z]+         # Name part
-        [0-9]+          # Number part (e.g., '1')
-        -[a-z]+         # Zone suffix (e.g., '-a', '-b')
-    """),
-    re.VERBOSE,
-)
 
 
 def validate_region(region: str | None) -> None:

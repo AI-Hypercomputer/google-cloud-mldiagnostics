@@ -54,7 +54,7 @@ parser.add_argument(
 )
 parser.add_argument("--project", help="Google Project ID.", type=str)
 parser.add_argument(
-    "--region", default="us-central1", help="Region.", type=str
+    "--region", default=None, help="Region.", type=str
 )
 parser.add_argument(
     "--jax_profiler_port",
