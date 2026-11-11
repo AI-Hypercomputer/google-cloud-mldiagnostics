@@ -71,6 +71,34 @@ def _escape_filter_value(value: Any) -> str:
   return str(value).replace("\\", "\\\\").replace('"', '\\"')
 
 
+def _add_configs_and_labels(
+    body: dict[str, Any],
+    update_mask_fields: list[str],
+    configs: dict[str, Any] | None,
+    labels: dict[str, str] | None,
+) -> None:
+  """Adds MLRun configs and labels to a PATCH body and its update mask.
+
+  The control plane replaces `configs` and `labels` wholesale and clears them
+  when the masked value is empty, so empty values are never sent. The paths are
+  added to the update mask even for `allow_missing` creations, because a
+  concurrent creation makes the server fall back to a masked update.
+
+  Args:
+    body: The MachineLearningRun JSON body to add the fields to.
+    update_mask_fields: The update mask paths to append the field paths to.
+    configs: MLRun configs keyed by `softwareConfigs`, `hardwareConfigs`, and
+      `userConfigs`.
+    labels: MLRun labels.
+  """
+  if configs:
+    body["configs"] = dict(configs)
+    update_mask_fields.append("configs")
+  if labels:
+    body["labels"] = dict(labels)
+    update_mask_fields.append("labels")
+
+
 class SelfHostedDiagonServiceClient:
   """REST client for synchronizing MLRun metadata with a self-hosted control plane.
 
@@ -84,7 +112,11 @@ class SelfHostedDiagonServiceClient:
     - MLRuns Upsert/Update Endpoint: Expose
       `PATCH /v1/machineLearningRuns/{run_id}`. Creations are processed as
       upserts via `allow_missing=true` and updates via the `update_mask` query
-      parameter.
+      parameter. The MachineLearningRun body may carry `configs` (an object
+      with `softwareConfigs`, `hardwareConfigs`, and `userConfigs` JSON
+      objects) and `labels` (a string-to-string map). The `configs` and
+      `labels` update mask paths replace the stored value wholesale, so the
+      client only sends them when they are non-empty.
     - ProfilerSessions Endpoints: Expose
       `POST /v1/machineLearningRuns/{run_id}/profilerSessions` for creation and
       `PATCH /v1/machineLearningRuns/{run_id}/profilerSessions/{session_id}`
@@ -190,10 +222,8 @@ class SelfHostedDiagonServiceClient:
       workload_targets: list[dict[str, Any]] | None = None,
   ) -> dict[str, Any] | None:
     _ = (
-        configs,
         tools,
         run_group,
-        labels,
         orchestrator,
         workload_targets,
     )
@@ -235,6 +265,8 @@ class SelfHostedDiagonServiceClient:
     if artifacts and artifacts.get("gcsPath"):
       body["baseBlobPath"] = artifacts["gcsPath"]
       update_mask_fields.append("base_blob_path")
+
+    _add_configs_and_labels(body, update_mask_fields, configs, labels)
 
     created_update_mask = ",".join(update_mask_fields)
 
@@ -371,8 +403,6 @@ class SelfHostedDiagonServiceClient:
         display_name,
         tools,
         artifacts,
-        labels,
-        configs,
         workload_targets,
         update_mask,
     )
@@ -393,10 +423,12 @@ class SelfHostedDiagonServiceClient:
       return None
     resource_name = f"machineLearningRuns/{run_id}"
     body: dict[str, Any] = {"name": resource_name, "workload": {"state": state}}
+    update_mask_fields = ["workload.state"]
+    _add_configs_and_labels(body, update_mask_fields, configs, labels)
     return self._patch(
         run_id=run_id,
         body=body,
-        update_mask="workload.state",
+        update_mask=",".join(update_mask_fields),
         allow_missing=False,
     )
 
