@@ -37,6 +37,13 @@ google-cloud-mldiagnostics is [available in PyPI](https://pypi.org/project/googl
 
 ## Releases
 
+### v1.0.12
+
+#### Changes
+
+- **Automatic GCP Region Detection (`region`)**:
+  - `machinelearning_run()` and the `run_vllm` command wrapper (`--region`) now default `region` to `None` instead of `"us-central1"`, automatically detecting the region from the Google Cloud environment when omitted (via GKE cluster metadata, or GCE instance zone metadata).
+
 ### v1.0.11
 
 #### Changes
