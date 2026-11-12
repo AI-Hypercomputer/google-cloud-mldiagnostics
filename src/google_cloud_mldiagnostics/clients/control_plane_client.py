@@ -33,12 +33,19 @@ import requests
 
 logger = logging.getLogger(__name__)
 _MAX_RETRIES = 3
+_UPDATE_ML_RUN_MAX_RETRIES = 5
+_RETRY_INITIAL_DELAY_SEC = 1.0
 _ERROR_CODE_ALREADY_EXISTS = 6
 _CLOUD_PLATFORM_SCOPE = "https://www.googleapis.com/auth/cloud-platform"
 _GKE_RESOLVE_MAX_ATTEMPTS = 8
 _GKE_RESOLVE_INITIAL_DELAY_SEC = 1.0
 _GKE_RESOLVE_BASE_DELAY_SEC = 1.0
 _GKE_RESOLVE_MAX_DELAY_SEC = 16.0
+
+
+def _jittered_delay(delay: float) -> float:
+  """Returns `delay` scaled by a uniform jitter factor in [0.25, 1.0)."""
+  return delay * (0.25 + 0.75 * random.random())
 
 
 def _escape_filter_value(value: Any) -> str:
@@ -852,7 +859,7 @@ class ControlPlaneClient:
     cluster_name = str(workload_details.get("cluster", "")).split("/")[-1]
 
     if initial_delay_sec > 0:
-      time.sleep(initial_delay_sec * (0.25 + 0.75 * random.random()))
+      time.sleep(_jittered_delay(initial_delay_sec))
 
     delay = base_delay_sec
     resolved_run: Optional[Dict[str, Any]] = None
@@ -897,7 +904,7 @@ class ControlPlaneClient:
             )
 
       if attempt < max_attempts - 1:
-        time.sleep(delay * (0.25 + 0.75 * random.random()))
+        time.sleep(_jittered_delay(delay))
         delay = min(delay * 2, max_delay_sec)
 
     if resolved_run is not None:
@@ -1104,7 +1111,10 @@ class ControlPlaneClient:
         requests.exceptions.RequestException: If the HTTP request fails
         RuntimeError: If the update fails to return a response or raise an error
     """
-    for attempt in range(_MAX_RETRIES):
+    # TODO([INTERNAL]): Replace client-side retry backoff with master-only
+    # MLRun creation and server-side Slurm target enrichment for the long-term
+    # multi-node fix.
+    for attempt in range(_UPDATE_ML_RUN_MAX_RETRIES):
       try:
         result = self._attempt_update_ml_run(
             name,
@@ -1130,12 +1140,21 @@ class ControlPlaneClient:
             name,
             run_phase,
             attempt + 1,
-            _MAX_RETRIES,
+            _UPDATE_ML_RUN_MAX_RETRIES,
             e,
         )
-        if attempt == _MAX_RETRIES - 1:
+        if attempt == _UPDATE_ML_RUN_MAX_RETRIES - 1:
           raise
-        time.sleep(0.2)
+        delay = _RETRY_INITIAL_DELAY_SEC * (2**attempt)
+        sleep_sec = _jittered_delay(delay)
+        logger.info(
+            "Retrying update for ML run '%s' in %.2fs (attempt %s/%s).",
+            name,
+            sleep_sec,
+            attempt + 2,
+            _UPDATE_ML_RUN_MAX_RETRIES,
+        )
+        time.sleep(sleep_sec)
 
     raise RuntimeError(
         "update_ml_run failed to return a response or raise an error"
