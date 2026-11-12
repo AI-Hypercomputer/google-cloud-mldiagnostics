@@ -528,7 +528,7 @@ try:
           run_group="<run_group>",
           configs={ "epochs": 100, "batch_size": 32 },
           project="<some_project>",
-          region="<some_zone>",
+          region="<some_region>",
           gcs_path="gs://<some_bucket>",
           on_demand_xprof=True,
         )
@@ -561,8 +561,9 @@ tpu slice size sweep can be labeled with `run_group=”tpuslicesizesweep”`
 `project` Optional. If not specified, the project will be extracted from gcloud
 CLI.
 
-`region` Optional, automatically assigned to `us-central1`. Currently only
-`us-central1` is available.
+`region` Optional. If not specified, the region will be automatically detected
+from the Google Cloud environment (such as environment variables, GKE/GCE
+metadata, or gcloud CLI).
 
 `configs` Optional. Key-value pairs containing configuration parameters for the
 run. Note: If configs are not defined, default software and system configs will
@@ -576,8 +577,8 @@ the user does not need to write them:
 The project and region information are where the machine learning run metadata
 information will be stored. Note that the region used for machinelearning run
 does not have to be the same as the region used for your actual workload run,
-example: you can run your workload in `europe_west4-a` but have your
-machinelearning run information stored in `us-central1-a`.
+example: you can run your workload in `europe-west4-a` but have your
+machinelearning run information stored in `us-central1`.
 
 `gcs_path` Required only if SDK will be used for profile capture. The Google
 Cloud Storage location where all profiles will be saved. Example
@@ -663,7 +664,7 @@ machinelearning_run(
   run_group="<run_group>",
   configs=yaml_data,
   project="<some_project>",
-  region="<some_zone>",
+  region="<some_region>",
   gcs_path="gs://<some_bucket>",
 )
 ```
@@ -1179,7 +1180,7 @@ The `run_vllm` wrapper:
 - `--mlrun_name` (Required): Unique identifier for the MLRun.
 - `--mlrun_gcs_path` (Required): Google Cloud Storage bucket path where profiler traces and artifacts are saved (e.g., `gs://my-bucket/vllm-profiles`).
 - `--project` (Optional): Google Cloud Project ID.
-- `--region` (Optional): Region where the MLRun metadata is stored (default: `us-central1`).
+- `--region` (Optional): Region where the MLRun metadata is stored. If not specified, it is automatically detected from the Google Cloud environment.
 - `--run_group` (Optional): Identifier used to group multiple related runs.
 - `--configs` (Optional): User-defined configurations passed as a JSON object string (e.g., `'{"user":"my-team", "running_on":"TPU"}'`).
 - `--framework` (Optional): Underlying ML framework for the workload (`pytorch` or `jax`, default: `pytorch`).
