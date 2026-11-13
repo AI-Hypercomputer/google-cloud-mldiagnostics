@@ -194,4 +194,8 @@ class MLRun:
   namespace: str | None = None
 
   def __post_init__(self) -> None:
+    # Self-contained runs (control_plane_url set) have no concept of a GCP
+    # region, so location is not validated.
+    if self.control_plane_url:
+      return
     gcp.validate_region(self.location)
