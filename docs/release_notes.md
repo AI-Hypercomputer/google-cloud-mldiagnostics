@@ -37,6 +37,13 @@ google-cloud-mldiagnostics is [available in PyPI](https://pypi.org/project/googl
 
 ## Releases
 
+### v1.0.13
+
+#### Changes
+
+- **Batch Workload Run Lifecycle in Self-Contained Mode (`DIAGON_WORKLOAD_KIND`)**:
+  - For self-contained Slurm jobs and Kubernetes batch workloads (`Job`, `JobSet`, `LeaderWorkerSet`, `RayJob`), final run completion and failure states are now reported by the cluster agent instead of on Python process exit, preventing pod retries from prematurely ending active runs.
+
 ### v1.0.12
 
 #### Changes
