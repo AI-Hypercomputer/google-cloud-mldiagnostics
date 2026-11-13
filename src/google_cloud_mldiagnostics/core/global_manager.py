@@ -170,10 +170,16 @@ class GlobalRunManager:
 
       self_contained = bool(mlrun.control_plane_url)
       if self_contained:
+        workload_kind = (
+            mlrun.workload_details.get("kind")
+            if isinstance(mlrun.workload_details, Mapping)
+            else None
+        )
         self._control_plane_client = (
             self_hosted_diagon_service_client.SelfHostedDiagonServiceClient(
                 control_plane_url=mlrun.control_plane_url or "",
                 cluster_id=mlrun.cluster_id,
+                workload_kind=workload_kind,
             )
         )
       else:

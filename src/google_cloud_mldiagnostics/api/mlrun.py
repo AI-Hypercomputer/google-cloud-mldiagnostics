@@ -260,6 +260,7 @@ def machinelearning_run(
 
   ml_run_id = None
   namespace = None
+  workload_kind = None
   workload_id = run_workload_id
 
   if self_contained:
@@ -289,22 +290,33 @@ def machinelearning_run(
             " SLURM_JOB_ID is set."
         )
       workload_id = slurm_job_id
+      workload_kind = mlrun_types.SLURM_WORKLOAD_KIND
       ml_run_id = _generate_self_hosted_run_identifier(
           f"{slurm_job_id}/{slurm_start_time}/{cluster_id}"
       )
     else:
       namespace = os.environ.get("POD_NAMESPACE") or "default"
-      workload_id = (
-          run_workload_id
-          or os.environ.get("DIAGON_WORKLOAD_ID")
+      env_workload_id = (
+          os.environ.get("DIAGON_WORKLOAD_ID")
           or os.environ.get("WORKLOAD_ID")
-          or name
+          or ""
       )
+      workload_id = run_workload_id or env_workload_id or name
+      if env_workload_id and workload_id != env_workload_id:
+        workload_kind = ""
+      else:
+        workload_kind = mlrun_types.normalize_k8s_workload_kind(
+            os.environ.get("DIAGON_WORKLOAD_KIND")
+        )
       ml_run_id = _generate_self_hosted_run_identifier(
           f"{namespace}/{workload_id}/{cluster_id}"
       )
 
   gcs_path = normalize_gcs_path(gcs_path)
+
+  extra_kwargs: dict[str, Any] = {}
+  if self_contained:
+    extra_kwargs["workload_kind"] = workload_kind
 
   return create_mlrun.initialize_mlrun(
       name=name,
@@ -331,4 +343,5 @@ def machinelearning_run(
       workload_id=workload_id,
       namespace=namespace,
       workload_details=workload_details,
+      **extra_kwargs,
   )

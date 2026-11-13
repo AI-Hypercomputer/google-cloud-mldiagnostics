@@ -31,18 +31,6 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-_GKE_WORKLOAD_KIND_MAP = {
-    "job": "Job",
-    "jobset": "JobSet",
-    "leaderworkerset": "LeaderWorkerSet",
-    "lws": "LeaderWorkerSet",
-    "raycluster": "RayCluster",
-    "rayjob": "RayJob",
-    "deployment": "Deployment",
-    "statefulset": "StatefulSet",
-}
-
-
 _K8S_NAMESPACE_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
 _USER_INJECTED_GKE_DETAILS_KEY = "_user_injected"
 _SLURM_TASK_BLOCK_RE = re.compile(r"^(\d+)(?:\(x(\d+)\))?$")
@@ -257,8 +245,7 @@ def _apply_user_gke_workload_details(
 
   raw_kind = workload_details.get("kind")
   if raw_kind:
-    kind_str = str(raw_kind)
-    details["kind"] = _GKE_WORKLOAD_KIND_MAP.get(kind_str.lower(), kind_str)
+    details["kind"] = mlrun_types.normalize_k8s_workload_kind(str(raw_kind))
   elif not details["kind"]:
     details["kind"] = "JobSet"
 
